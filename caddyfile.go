@@ -15,8 +15,12 @@
 package ratelimitissuer
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/caddyserver/certmagic"
 
+	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
@@ -27,8 +31,8 @@ import (
 //
 //	issuer rate_limit [<name>] {
 //	    issuer                       <module> { ... }
-//	    max_certs_per_domain         <n>
 //	    global_max_certs_per_domain  <n>
+//	    max_certs_per_domain         <n>
 //	    global_rate_limit            <limit> <duration>
 //	    per_domain_rate_limit        <limit> <duration>
 //	}
@@ -73,27 +77,31 @@ func (iss *RateLimitIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			iss.MaxCertsPerDomainRaw = d.Val()
+			if err := setCaddyInt(d.Val(), &iss.MaxCertsPerDomain, &iss.MaxCertsPerDomainRaw); err != nil {
+				return d.Errf("invalid max_certs_per_domain value: %v", err)
+			}
 
 		case "global_max_certs_per_domain":
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			iss.GlobalMaxCertsPerDomainRaw = d.Val()
+			if err := setCaddyInt(d.Val(), &iss.GlobalMaxCertsPerDomain, &iss.GlobalMaxCertsPerDomainRaw); err != nil {
+				return d.Errf("invalid global_max_certs_per_domain value: %v", err)
+			}
 
 		case "global_rate_limit":
 			args := d.RemainingArgs()
 			if len(args) != 2 {
 				return d.Err("global_rate_limit requires exactly two arguments: <limit> <duration>")
 			}
-			iss.GlobalRateLimit = &RateLimit{LimitRaw: args[0], DurationRaw: args[1]}
+			iss.GlobalRateLimit = makeCaddyRateLimit(args[0], args[1])
 
 		case "per_domain_rate_limit":
 			args := d.RemainingArgs()
 			if len(args) != 2 {
 				return d.Err("per_domain_rate_limit requires exactly two arguments: <limit> <duration>")
 			}
-			iss.PerDomainRateLimit = &RateLimit{LimitRaw: args[0], DurationRaw: args[1]}
+			iss.PerDomainRateLimit = makeCaddyRateLimit(args[0], args[1])
 
 		default:
 			return d.Errf("unknown subdirective '%s'", d.Val())
@@ -121,6 +129,45 @@ func unmarshalIssuer(d *caddyfile.Dispenser) ([]byte, error) {
 		return nil, d.Errf("module %s (%T) is not a certmagic.Issuer", modID, unm)
 	}
 	return caddyconfig.JSONModuleObject(issuer, "module", modName, nil), nil
+}
+
+// setCaddyInt sets intDst to the parsed integer when val is a plain number, or
+// rawDst to val when it contains a Caddy placeholder. This keeps the resolved
+// value visible in the running JSON config for literal values while preserving
+// placeholder expressions for deferred resolution during provisioning.
+func setCaddyInt(val string, intDst *int, rawDst *string) error {
+	if strings.Contains(val, "{") {
+		*rawDst = val
+		return nil
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return err
+	}
+	*intDst = n
+	return nil
+}
+
+// makeCaddyRateLimit constructs a RateLimit from Caddyfile token strings.
+// Plain integers and durations are parsed immediately; placeholder expressions
+// are stored in the Raw fields for deferred resolution during provisioning.
+func makeCaddyRateLimit(limitVal, durationVal string) *RateLimit {
+	rl := &RateLimit{}
+	if strings.Contains(limitVal, "{") {
+		rl.LimitRaw = limitVal
+	} else if n, err := strconv.Atoi(limitVal); err == nil {
+		rl.Limit = n
+	} else {
+		rl.LimitRaw = limitVal // will fail at provision time with a clear error
+	}
+	if strings.Contains(durationVal, "{") {
+		rl.DurationRaw = durationVal
+	} else if d, err := caddy.ParseDuration(durationVal); err == nil {
+		rl.Duration = caddy.Duration(d)
+	} else {
+		rl.DurationRaw = durationVal // will fail at provision time with a clear error
+	}
+	return rl
 }
 
 // Interface guards

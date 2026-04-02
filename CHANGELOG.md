@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In-memory at-capacity cache (2-minute TTL) to avoid repeated storage reads for domains already at their certificate cap
 - Distributed-safe storage locking via `certmagic.Storage.Lock`/`Unlock` for certificate count reads and writes
 - Counters recorded only on successful issuance; a failed or rejected issuance does not consume a slot
+- ARI support (`GetRenewalInfo`) delegating to the inner issuer (RFC 8739).
 - Caddyfile support with inline instance name: `issuer rate_limit [<name>] { ... }`
 - Caddy placeholder support in all numeric and duration configuration values
 - `PreCheck` fast-path rejects requests before the inner issuer sets up challenge infrastructure

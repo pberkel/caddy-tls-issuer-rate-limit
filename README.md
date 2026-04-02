@@ -66,8 +66,8 @@ xcaddy build \
                     dir https://acme-v02.api.letsencrypt.org/directory
                 }
             }
-            max_certs_per_domain        20
             global_max_certs_per_domain 50
+            max_certs_per_domain        20
             global_rate_limit           100 1h
             per_domain_rate_limit       5   6h
         }
