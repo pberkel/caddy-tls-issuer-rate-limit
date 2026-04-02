@@ -134,10 +134,10 @@ type RateLimitIssuer struct {
 // their certificate cap, avoiding repeated storage reads for already-full
 // domains. Separate caches are maintained for per-issuer and global scopes.
 type approvalState struct {
-	mu                  sync.Mutex
-	atCapacityIssuer    map[string]time.Time
-	atCapacityGlobal    map[string]time.Time
-	now                 func() time.Time
+	mu               sync.Mutex
+	atCapacityIssuer map[string]time.Time
+	atCapacityGlobal map[string]time.Time
+	now              func() time.Time
 }
 
 // storedCertCount is the on-disk representation of issued certificate subjects
