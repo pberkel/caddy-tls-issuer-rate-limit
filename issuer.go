@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/certmagic"
+	"github.com/mholt/acmez/v3/acme"
 	"go.uber.org/zap"
 	"golang.org/x/net/publicsuffix"
 
@@ -262,6 +263,16 @@ func (iss *RateLimitIssuer) Issue(ctx context.Context, csr *x509.CertificateRequ
 // IssuerKey delegates to the inner issuer's key for certificate storage namespacing.
 func (iss *RateLimitIssuer) IssuerKey() string {
 	return iss.issuer.IssuerKey()
+}
+
+// GetRenewalInfo implements certmagic.RenewalInfoGetter by delegating to the
+// inner issuer, if it supports ARI. This allows Caddy to fetch ACME Renewal
+// Information (RFC 8739) through the rate_limit wrapper.
+func (iss *RateLimitIssuer) GetRenewalInfo(ctx context.Context, cert certmagic.Certificate) (acme.RenewalInfo, error) {
+	if rig, ok := iss.issuer.(certmagic.RenewalInfoGetter); ok {
+		return rig.GetRenewalInfo(ctx, cert)
+	}
+	return acme.RenewalInfo{}, fmt.Errorf("inner issuer does not support ARI")
 }
 
 // checkInMemoryLimits performs fast, non-storage limit checks suitable for
@@ -518,9 +529,10 @@ func (iss *RateLimitIssuer) globalCertCountKey(domain string) string {
 
 // Interface guards
 var (
-	_ caddy.Module          = (*RateLimitIssuer)(nil)
-	_ caddy.Provisioner     = (*RateLimitIssuer)(nil)
-	_ certmagic.Issuer      = (*RateLimitIssuer)(nil)
-	_ certmagic.PreChecker  = (*RateLimitIssuer)(nil)
-	_ caddytls.ConfigSetter = (*RateLimitIssuer)(nil)
+	_ caddy.Module                = (*RateLimitIssuer)(nil)
+	_ caddy.Provisioner           = (*RateLimitIssuer)(nil)
+	_ certmagic.Issuer            = (*RateLimitIssuer)(nil)
+	_ certmagic.PreChecker        = (*RateLimitIssuer)(nil)
+	_ certmagic.RenewalInfoGetter = (*RateLimitIssuer)(nil)
+	_ caddytls.ConfigSetter       = (*RateLimitIssuer)(nil)
 )
