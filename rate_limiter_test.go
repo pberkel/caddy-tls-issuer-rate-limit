@@ -83,12 +83,18 @@ func TestSlidingWindow_ExactBoundary(t *testing.T) {
 // --- rateLimitState ---------------------------------------------------------
 
 func newTestRateLimiter(globalLimit, perDomainLimit *RateLimit, now func() time.Time) *rateLimitState {
-	return &rateLimitState{
-		globalLimit:    globalLimit,
-		perDomainLimit: perDomainLimit,
-		domains:        make(map[string]*slidingWindow),
-		now:            now,
+	s := &rateLimitState{
+		domains: make(map[string][]*slidingWindow),
+		now:     now,
 	}
+	if globalLimit != nil {
+		s.globalLimits = []*RateLimit{globalLimit}
+		s.globals = []*slidingWindow{{}}
+	}
+	if perDomainLimit != nil {
+		s.perDomainLimits = []*RateLimit{perDomainLimit}
+	}
+	return s
 }
 
 func TestRateLimiter_GlobalCheckBeforeLimit(t *testing.T) {

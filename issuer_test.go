@@ -131,7 +131,7 @@ func newTestIssuer(inner certmagic.Issuer, storage certmagic.Storage) *RateLimit
 		issuer:  inner,
 		storage: storage,
 		rateLimiter: &rateLimitState{
-			domains: make(map[string]*slidingWindow),
+			domains: make(map[string][]*slidingWindow),
 			now:     time.Now,
 		},
 		approvals: &approvalState{
@@ -148,10 +148,15 @@ func newTestIssuerWithLimits(inner certmagic.Issuer, storage certmagic.Storage, 
 	iss := newTestIssuer(inner, storage)
 	iss.Name = "test"
 	iss.MaxCertsPerDomain = maxCerts
-	iss.GlobalRateLimit = globalRL
-	iss.PerDomainRateLimit = perDomainRL
-	iss.rateLimiter.globalLimit = globalRL
-	iss.rateLimiter.perDomainLimit = perDomainRL
+	if globalRL != nil {
+		iss.GlobalRateLimit = []*RateLimit{globalRL}
+		iss.rateLimiter.globalLimits = iss.GlobalRateLimit
+		iss.rateLimiter.globals = []*slidingWindow{{}}
+	}
+	if perDomainRL != nil {
+		iss.PerDomainRateLimit = []*RateLimit{perDomainRL}
+		iss.rateLimiter.perDomainLimits = iss.PerDomainRateLimit
+	}
 	return iss
 }
 
@@ -717,11 +722,11 @@ func TestIssue_RecordsCountersOnSuccess(t *testing.T) {
 
 	// In-memory rate limit counters incremented.
 	iss.rateLimiter.mu.Lock()
-	globalCount := iss.rateLimiter.global.count(time.Now(), time.Duration(iss.GlobalRateLimit.Duration))
-	domainWindow, hasDomain := iss.rateLimiter.domains["example.com"]
+	globalCount := iss.rateLimiter.globals[0].count(time.Now(), time.Duration(iss.GlobalRateLimit[0].Duration))
+	domainWindows, hasDomain := iss.rateLimiter.domains["example.com"]
 	var domainCount int
 	if hasDomain {
-		domainCount = domainWindow.count(time.Now(), time.Duration(iss.PerDomainRateLimit.Duration))
+		domainCount = domainWindows[0].count(time.Now(), time.Duration(iss.PerDomainRateLimit[0].Duration))
 	}
 	iss.rateLimiter.mu.Unlock()
 

@@ -94,14 +94,14 @@ func (iss *RateLimitIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			if len(args) != 2 {
 				return d.Err("global_rate_limit requires exactly two arguments: <limit> <duration>")
 			}
-			iss.GlobalRateLimit = makeCaddyRateLimit(args[0], args[1])
+			iss.GlobalRateLimit = append(iss.GlobalRateLimit, makeCaddyRateLimit(args[0], args[1]))
 
 		case "per_domain_rate_limit":
 			args := d.RemainingArgs()
 			if len(args) != 2 {
 				return d.Err("per_domain_rate_limit requires exactly two arguments: <limit> <duration>")
 			}
-			iss.PerDomainRateLimit = makeCaddyRateLimit(args[0], args[1])
+			iss.PerDomainRateLimit = append(iss.PerDomainRateLimit, makeCaddyRateLimit(args[0], args[1]))
 
 		default:
 			return d.Errf("unknown subdirective '%s'", d.Val())

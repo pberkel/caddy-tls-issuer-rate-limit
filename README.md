@@ -69,7 +69,9 @@ xcaddy build \
             global_max_certs_per_domain 50
             max_certs_per_domain        20
             global_rate_limit           100 1h
+            global_rate_limit           500 24h
             per_domain_rate_limit       5   6h
+            per_domain_rate_limit       20  24h
         }
     }
     reverse_proxy localhost:8080
@@ -93,8 +95,8 @@ issuer rate_limit [<name>] {
 | `issuer <module> { ... }` | Yes | Inner issuer to delegate certificate issuance to. Any `tls.issuance` module is accepted. |
 | `max_certs_per_domain <n>` | No | Maximum unique certificates per registrable domain (eTLD+1), scoped to this `rate_limit` instance. Requires `<name>`. Counts are persisted across restarts. |
 | `global_max_certs_per_domain <n>` | No | Maximum unique certificates per registrable domain (eTLD+1), counted globally across all `rate_limit` instances. Counts are persisted across restarts. |
-| `global_rate_limit <limit> <duration>` | No | Maximum new certificates across all domains within a rolling time window (e.g. `100 1h`). |
-| `per_domain_rate_limit <limit> <duration>` | No | Maximum new certificates per registrable domain within a rolling time window (e.g. `5 6h`). |
+| `global_rate_limit <limit> <duration>` | No | Maximum new certificates across all domains within a rolling time window (e.g. `100 1h`). May be specified multiple times for tiered limits; all windows must have capacity. |
+| `per_domain_rate_limit <limit> <duration>` | No | Maximum new certificates per registrable domain within a rolling time window (e.g. `5 6h`). May be specified multiple times for tiered limits; all windows must have capacity. |
 
 Both `max_certs_per_domain` and `global_max_certs_per_domain` may be configured simultaneously; an issuance must satisfy both caps to proceed.
 
@@ -137,14 +139,14 @@ Both `max_certs_per_domain` and `global_max_certs_per_domain` may be configured 
                 },
                 "max_certs_per_domain": 20,
                 "global_max_certs_per_domain": 50,
-                "global_rate_limit": {
-                  "limit": 100,
-                  "duration": 3600000000000
-                },
-                "per_domain_rate_limit": {
-                  "limit": 5,
-                  "duration": 21600000000000
-                }
+                "global_rate_limit": [
+                  { "limit": 100, "duration": 3600000000000 },
+                  { "limit": 500, "duration": 86400000000000 }
+                ],
+                "per_domain_rate_limit": [
+                  { "limit": 5,  "duration": 21600000000000 },
+                  { "limit": 20, "duration": 86400000000000 }
+                ]
               }
             ]
           }
@@ -200,7 +202,9 @@ For on-demand TLS deployments, use [`caddy-tls-permission-policy`](https://githu
             max_certs_per_domain        20
             global_max_certs_per_domain 50
             global_rate_limit           100 1h
+            global_rate_limit           500 24h
             per_domain_rate_limit       5   6h
+            per_domain_rate_limit       20  24h
         }
     }
 }

@@ -41,14 +41,15 @@ type RateLimit struct {
 }
 
 // rateLimitState holds in-memory exact sliding-window counters for global and
-// per-domain rate limits.
+// per-domain rate limits. Each configured rate limit has its own window so
+// that multiple tiered limits can be enforced simultaneously.
 type rateLimitState struct {
-	mu             sync.Mutex
-	global         slidingWindow
-	domains        map[string]*slidingWindow
-	globalLimit    *RateLimit
-	perDomainLimit *RateLimit
-	now            func() time.Time
+	mu              sync.Mutex
+	globals         []*slidingWindow
+	domains         map[string][]*slidingWindow
+	globalLimits    []*RateLimit
+	perDomainLimits []*RateLimit
+	now             func() time.Time
 }
 
 // slidingWindow tracks exact issuance timestamps within a rolling time window.
@@ -86,55 +87,72 @@ func (w *slidingWindow) add(now time.Time, d time.Duration) {
 	w.timestamps = append(w.timestamps, now)
 }
 
-// checkGlobal returns an error if the global rate limit is exceeded.
+// checkGlobal returns an error if any global rate limit window is exceeded.
 func (s *rateLimitState) checkGlobal() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d := time.Duration(s.globalLimit.Duration)
-	if s.global.count(s.now(), d) >= s.globalLimit.Limit {
-		return fmt.Errorf("global certificate issuance rate limit exceeded")
+	now := s.now()
+	for i, rl := range s.globalLimits {
+		if s.globals[i].count(now, time.Duration(rl.Duration)) >= rl.Limit {
+			return fmt.Errorf("global certificate issuance rate limit exceeded")
+		}
 	}
 	return nil
 }
 
-// recordGlobal increments the global issuance counter.
+// recordGlobal increments all global issuance windows.
 func (s *rateLimitState) recordGlobal() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.global.add(s.now(), time.Duration(s.globalLimit.Duration))
+	now := s.now()
+	for i, rl := range s.globalLimits {
+		s.globals[i].add(now, time.Duration(rl.Duration))
+	}
 }
 
-// checkDomain returns an error if the per-domain rate limit is exceeded for
-// the given registrable domain. Expired domain windows are evicted lazily.
+// checkDomain returns an error if any per-domain rate limit window is exceeded
+// for the given registrable domain. Expired domain windows are evicted lazily.
 func (s *rateLimitState) checkDomain(domain string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	w, ok := s.domains[domain]
+	windows, ok := s.domains[domain]
 	if !ok {
 		return nil
 	}
-	d := time.Duration(s.perDomainLimit.Duration)
-	n := w.count(s.now(), d)
-	if n == 0 {
-		delete(s.domains, domain)
-		return nil
+	now := s.now()
+	allEmpty := true
+	for i, rl := range s.perDomainLimits {
+		d := time.Duration(rl.Duration)
+		n := windows[i].count(now, d)
+		if n > 0 {
+			allEmpty = false
+		}
+		if n >= rl.Limit {
+			return fmt.Errorf("per-domain certificate issuance rate limit exceeded for %s", domain)
+		}
 	}
-	if n >= s.perDomainLimit.Limit {
-		return fmt.Errorf("per-domain certificate issuance rate limit exceeded for %s", domain)
+	if allEmpty {
+		delete(s.domains, domain)
 	}
 	return nil
 }
 
-// recordDomain increments the per-domain issuance counter for domain.
+// recordDomain increments all per-domain issuance windows for domain.
 func (s *rateLimitState) recordDomain(domain string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	w, ok := s.domains[domain]
+	windows, ok := s.domains[domain]
 	if !ok {
-		w = &slidingWindow{}
-		s.domains[domain] = w
+		windows = make([]*slidingWindow, len(s.perDomainLimits))
+		for i := range windows {
+			windows[i] = &slidingWindow{}
+		}
+		s.domains[domain] = windows
 	}
-	w.add(s.now(), time.Duration(s.perDomainLimit.Duration))
+	now := s.now()
+	for i, rl := range s.perDomainLimits {
+		windows[i].add(now, time.Duration(rl.Duration))
+	}
 }
 
 // resolve replaces Caddy placeholders in LimitRaw and DurationRaw and stores

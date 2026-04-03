@@ -116,13 +116,16 @@ type RateLimitIssuer struct {
 	// precedence over GlobalMaxCertsPerDomain.
 	GlobalMaxCertsPerDomainRaw string `json:"global_max_certs_per_domain_raw,omitempty"`
 
-	// Global issuance rate limit across all domains. Limits the total number
-	// of new certificates issued within a rolling time window.
-	GlobalRateLimit *RateLimit `json:"global_rate_limit,omitempty"`
+	// Global issuance rate limits across all domains. Each entry enforces an
+	// independent sliding window; all windows must have capacity for issuance
+	// to proceed. Multiple entries allow tiered limits (e.g. 100/hour and
+	// 500/day simultaneously).
+	GlobalRateLimit []*RateLimit `json:"global_rate_limit,omitempty"`
 
-	// Per registrable domain issuance rate limit. Limits the number of new
-	// certificates issued for a single domain within a rolling time window.
-	PerDomainRateLimit *RateLimit `json:"per_domain_rate_limit,omitempty"`
+	// Per registrable domain issuance rate limits. Each entry enforces an
+	// independent sliding window per domain; all windows must have capacity.
+	// Multiple entries allow tiered limits (e.g. 5/6h and 20/day per domain).
+	PerDomainRateLimit []*RateLimit `json:"per_domain_rate_limit,omitempty"`
 
 	issuer      certmagic.Issuer
 	logger      *zap.Logger
@@ -180,27 +183,36 @@ func (iss *RateLimitIssuer) Provision(ctx caddy.Context) error {
 			return fmt.Errorf("invalid global_max_certs_per_domain value: %q", resolved)
 		}
 	}
-	if err := iss.GlobalRateLimit.resolve(repl, "global_rate_limit"); err != nil {
-		return err
+	for _, rl := range iss.GlobalRateLimit {
+		if err := rl.resolve(repl, "global_rate_limit"); err != nil {
+			return err
+		}
+		if err := rl.validate("global_rate_limit"); err != nil {
+			return err
+		}
 	}
-	if err := iss.PerDomainRateLimit.resolve(repl, "per_domain_rate_limit"); err != nil {
-		return err
-	}
-	if err := iss.GlobalRateLimit.validate("global_rate_limit"); err != nil {
-		return err
-	}
-	if err := iss.PerDomainRateLimit.validate("per_domain_rate_limit"); err != nil {
-		return err
+	for _, rl := range iss.PerDomainRateLimit {
+		if err := rl.resolve(repl, "per_domain_rate_limit"); err != nil {
+			return err
+		}
+		if err := rl.validate("per_domain_rate_limit"); err != nil {
+			return err
+		}
 	}
 	if iss.MaxCertsPerDomain > 0 && iss.Name == "" {
 		return fmt.Errorf("name is required when max_certs_per_domain is set")
 	}
 
+	globals := make([]*slidingWindow, len(iss.GlobalRateLimit))
+	for i := range globals {
+		globals[i] = &slidingWindow{}
+	}
 	iss.rateLimiter = &rateLimitState{
-		globalLimit:    iss.GlobalRateLimit,
-		perDomainLimit: iss.PerDomainRateLimit,
-		domains:        make(map[string]*slidingWindow),
-		now:            time.Now,
+		globalLimits:    iss.GlobalRateLimit,
+		perDomainLimits: iss.PerDomainRateLimit,
+		globals:         globals,
+		domains:         make(map[string][]*slidingWindow),
+		now:             time.Now,
 	}
 	iss.approvals = &approvalState{
 		atCapacityIssuer: make(map[string]time.Time),
@@ -285,13 +297,13 @@ func (iss *RateLimitIssuer) GetRenewalInfo(ctx context.Context, cert certmagic.C
 // early rejection in PreCheck. Only in-memory rate limit counters and the
 // at-capacity domain caches are consulted; no storage reads are performed.
 func (iss *RateLimitIssuer) checkInMemoryLimits(names []string) error {
-	if iss.GlobalRateLimit != nil {
+	if len(iss.GlobalRateLimit) > 0 {
 		if err := iss.rateLimiter.checkGlobal(); err != nil {
 			return err
 		}
 	}
 	for _, ds := range iss.uniqueSubjects(names) {
-		if iss.PerDomainRateLimit != nil {
+		if len(iss.PerDomainRateLimit) > 0 {
 			if err := iss.rateLimiter.checkDomain(ds.domain); err != nil {
 				return err
 			}
@@ -360,11 +372,11 @@ func (iss *RateLimitIssuer) checkCertCount(ctx context.Context, storageKey, doma
 // recordIssuance records a successful certificate issuance in all counters.
 // Errors from storage operations are logged but do not fail the issuance.
 func (iss *RateLimitIssuer) recordIssuance(ctx context.Context, names []string) {
-	if iss.GlobalRateLimit != nil {
+	if len(iss.GlobalRateLimit) > 0 {
 		iss.rateLimiter.recordGlobal()
 	}
 	for _, ds := range iss.uniqueSubjects(names) {
-		if iss.PerDomainRateLimit != nil {
+		if len(iss.PerDomainRateLimit) > 0 {
 			iss.rateLimiter.recordDomain(ds.domain)
 		}
 		if iss.storage != nil {
