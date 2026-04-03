@@ -293,6 +293,15 @@ func (iss *RateLimitIssuer) GetRenewalInfo(ctx context.Context, cert certmagic.C
 	return acme.RenewalInfo{}, fmt.Errorf("inner issuer does not support ARI")
 }
 
+// Revoke implements certmagic.Revoker by delegating to the inner issuer,
+// if it supports revocation.
+func (iss *RateLimitIssuer) Revoke(ctx context.Context, cert certmagic.CertificateResource, reason int) error {
+	if r, ok := iss.issuer.(certmagic.Revoker); ok {
+		return r.Revoke(ctx, cert, reason)
+	}
+	return fmt.Errorf("inner issuer does not support revocation")
+}
+
 // checkInMemoryLimits performs fast, non-storage limit checks suitable for
 // early rejection in PreCheck. Only in-memory rate limit counters and the
 // at-capacity domain caches are consulted; no storage reads are performed.
@@ -563,6 +572,7 @@ var (
 	_ caddy.Provisioner           = (*RateLimitIssuer)(nil)
 	_ certmagic.Issuer            = (*RateLimitIssuer)(nil)
 	_ certmagic.PreChecker        = (*RateLimitIssuer)(nil)
+	_ certmagic.Revoker           = (*RateLimitIssuer)(nil)
 	_ certmagic.RenewalInfoGetter = (*RateLimitIssuer)(nil)
 	_ caddytls.ConfigSetter       = (*RateLimitIssuer)(nil)
 )
