@@ -34,10 +34,10 @@ func init() {
 //
 // Routes:
 //
-//	GET    /rate-limit-issuer/          - HTML web interface
-//	GET    /rate-limit-issuer/pools     - JSON status of all shared pools
-//	DELETE /rate-limit-issuer/pools/{name}                  - reset all windows for a pool
-//	DELETE /rate-limit-issuer/pools/{name}/domains/{domain} - reset per-domain windows
+//	GET    /rate_limit_issuer/          - HTML web interface
+//	GET    /rate_limit_issuer/pools     - JSON status of all shared pools
+//	DELETE /rate_limit_issuer/pools/{name}                  - reset all windows for a pool
+//	DELETE /rate_limit_issuer/pools/{name}/domains/{domain} - reset per-domain windows
 type RateLimitAdmin struct{}
 
 // CaddyModule returns the Caddy module information.
@@ -52,7 +52,7 @@ func (RateLimitAdmin) CaddyModule() caddy.ModuleInfo {
 func (a RateLimitAdmin) Routes() []caddy.AdminRoute {
 	return []caddy.AdminRoute{
 		{
-			Pattern: "/rate-limit-issuer/",
+			Pattern: "/rate_limit_issuer/",
 			Handler: caddy.AdminHandlerFunc(a.handleRequest),
 		},
 	}
@@ -61,7 +61,7 @@ func (a RateLimitAdmin) Routes() []caddy.AdminRoute {
 // handleRequest dispatches incoming admin requests by method and path.
 func (a RateLimitAdmin) handleRequest(w http.ResponseWriter, r *http.Request) error {
 	// Strip the registered prefix to get the local path.
-	local := strings.TrimPrefix(r.URL.Path, "/rate-limit-issuer")
+	local := strings.TrimPrefix(r.URL.Path, "/rate_limit_issuer")
 	local = strings.TrimPrefix(local, "/")
 	local = strings.TrimSuffix(local, "/")
 
@@ -78,6 +78,9 @@ func (a RateLimitAdmin) handleRequest(w http.ResponseWriter, r *http.Request) er
 		rest := strings.TrimPrefix(local, "pools/")
 		if i := strings.Index(rest, "/domains/"); i >= 0 {
 			return a.handleDeletePool(w, r, rest[:i], rest[i+len("/domains/"):])
+		}
+		if strings.HasSuffix(rest, "/total") {
+			return a.handleDeleteTotal(w, r, strings.TrimSuffix(rest, "/total"))
 		}
 		return a.handleDeletePool(w, r, rest, "")
 
@@ -99,7 +102,7 @@ type WindowStatus struct {
 type PoolStatus struct {
 	Name    string                    `json:"name"`
 	Kind    string                    `json:"kind"`
-	Global  []WindowStatus            `json:"global,omitempty"`
+	Total   []WindowStatus            `json:"total,omitempty"`
 	Domains map[string][]WindowStatus `json:"domains,omitempty"`
 }
 
@@ -114,6 +117,23 @@ func (a RateLimitAdmin) handleGetPools(w http.ResponseWriter, r *http.Request) e
 	sort.Slice(pools, func(i, j int) bool { return pools[i].Name < pools[j].Name })
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(pools)
+}
+
+// handleDeleteTotal resets only the total (cross-domain) windows for the named pool.
+func (a RateLimitAdmin) handleDeleteTotal(w http.ResponseWriter, r *http.Request, name string) error {
+	val, ok := processRegistry.Load(name)
+	if !ok {
+		http.Error(w, "pool not found", http.StatusNotFound)
+		return nil
+	}
+	s := val.(*registryEntry).state
+	s.mu.Lock()
+	for i := range s.totals {
+		s.totals[i].timestamps = nil
+	}
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 // handleDeletePool resets windows for the named pool or, when domain is
@@ -158,7 +178,7 @@ func entryToStatus(name string, entry *registryEntry) PoolStatus {
 
 	for i, rl := range s.totalLimits {
 		d := time.Duration(rl.Duration)
-		ps.Global = append(ps.Global, WindowStatus{
+		ps.Total = append(ps.Total, WindowStatus{
 			Limit:    rl.Limit,
 			Duration: d.String(),
 			Count:    s.totals[i].count(now, d),
@@ -187,7 +207,7 @@ func entryToStatus(name string, entry *registryEntry) PoolStatus {
 // Interface guard
 var _ caddy.AdminRouter = RateLimitAdmin{}
 
-// adminHTML is the self-contained web interface served at /rate-limit-issuer/.
+// adminHTML is the self-contained web interface served at /rate_limit_issuer/.
 const adminHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -241,10 +261,15 @@ button.danger:hover { background: #fff5f5; }
   </div>
 </main>
 <script>
-const base = '/rate-limit-issuer';
+const base = window.location.pathname.replace(/\/+$/, '');
 
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+// jsonAttr JSON-encodes v and HTML-escapes the result for use inside a
+// double-quoted HTML attribute (e.g. onclick="fn(jsonAttr(v))").
+function jsonAttr(v) {
+  return JSON.stringify(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function barClass(count, limit) {
   const p = count / limit;
@@ -255,14 +280,16 @@ function windowBar(w) {
   const pct = Math.min(100, Math.round(w.count / w.limit * 100));
   return '<div class="bar-wrap"><div class="bar"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div></div>';
 }
-function renderGlobal(windows) {
+function renderGlobal(name, windows) {
   if (!windows || windows.length === 0) return '';
-  const rows = windows.map(w =>
-    '<tr><td class="count-cell">' + w.count + ' / ' + w.limit + '</td>' +
-    '<td>' + esc(w.duration) + '</td><td>' + windowBar(w) + '</td></tr>'
-  ).join('');
-  return '<div class="section-label">Global</div>' +
-    '<table><thead><tr><th>Count / Limit</th><th>Window</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  const first = windows[0] || {count:0,limit:1,duration:''};
+  const row = '<tr>' +
+    '<td class="count-cell">' + windows.map(w => w.count+'/'+w.limit).join(', ') + '</td>' +
+    '<td>' + windows.map(w => esc(w.duration)).join(', ') + '</td>' +
+    '<td>' + windowBar(first) + '</td>' +
+    '<td><button onclick="resetTotal(' + jsonAttr(name) + ')">Reset</button></td></tr>';
+  return '<div class="section-label">Total</div>' +
+    '<table><thead><tr><th>Count / Limit</th><th>Window</th><th></th><th></th></tr></thead><tbody>' + row + '</tbody></table>';
 }
 function renderDomains(name, domains) {
   if (!domains || Object.keys(domains).length === 0) return '';
@@ -273,7 +300,7 @@ function renderDomains(name, domains) {
       '<td class="count-cell">' + windows.map(w => w.count+'/'+w.limit).join(', ') + '</td>' +
       '<td>' + windows.map(w => esc(w.duration)).join(', ') + '</td>' +
       '<td>' + windowBar(first) + '</td>' +
-      '<td><button onclick="resetDomain(' + JSON.stringify(name) + ',' + JSON.stringify(domain) + ')">Reset</button></td></tr>';
+      '<td><button onclick="resetDomain(' + jsonAttr(name) + ',' + jsonAttr(domain) + ')">Reset</button></td></tr>';
   }).join('');
   return '<div class="section-label">Per Domain</div>' +
     '<table><thead><tr><th>Domain</th><th>Count / Limit</th><th>Window</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
@@ -287,8 +314,8 @@ function renderGroup(items, containerID, emptyMsg) {
   el.innerHTML = items.map(item =>
     '<div class="pool">' +
     '<div class="pool-header"><span class="pool-name">' + esc(item.name) + '</span>' +
-    '<button class="danger" onclick="resetAll(' + JSON.stringify(item.name) + ')">Reset all</button></div>' +
-    renderGlobal(item.global) +
+    '<button class="danger" onclick="resetAll(' + jsonAttr(item.name) + ')">Reset all</button></div>' +
+    renderGlobal(item.name, item.total) +
     renderDomains(item.name, item.domains) +
     '</div>'
   ).join('');
@@ -310,6 +337,13 @@ async function load() {
 async function resetAll(name) {
   if (!confirm('Reset all windows for \u201c' + name + '\u201d?')) return;
   const r = await fetch(base + '/pools/' + encodeURIComponent(name), {method: 'DELETE'});
+  if (!r.ok && r.status !== 204) alert('Reset failed: HTTP ' + r.status);
+  await load();
+}
+
+async function resetTotal(name) {
+  if (!confirm('Reset total windows for \u201c' + name + '\u201d?')) return;
+  const r = await fetch(base + '/pools/' + encodeURIComponent(name) + '/total', {method: 'DELETE'});
   if (!r.ok && r.status !== 204) alert('Reset failed: HTTP ' + r.status);
   await load();
 }

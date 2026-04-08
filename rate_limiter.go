@@ -44,9 +44,8 @@ type rateLimitState struct {
 }
 
 // slidingWindow tracks exact issuance timestamps within a rolling time window.
-// Timestamps are always appended in chronological order, so trimming expired
-// entries is a binary search from the front. A zero-value slidingWindow is
-// ready to use.
+// Timestamps are always appended in chronological order, so expired entries
+// are always a contiguous prefix. A zero-value slidingWindow is ready to use.
 type slidingWindow struct {
 	timestamps []time.Time
 }
