@@ -99,16 +99,23 @@ func validatePoolName(name string) error {
 	return nil
 }
 
+// poolSaveInterval is how often shared pool state is persisted to storage by
+// the background save goroutine. This bounds the amount of state lost on an
+// unclean process exit (OOM kill, SIGKILL, hardware failure).
+const poolSaveInterval = 5 * time.Minute
+
 // registryEntry is the process-lifetime record for a rate limit pool. Shared
 // pool entries (local == false) persist for the lifetime of the process;
 // local instance entries (local == true) are removed from processRegistry when
 // the owning RateLimitIssuer is cleaned up.
 type registryEntry struct {
-	mu     sync.Mutex
-	state  *rateLimitState
-	pool   *SharedPool // nil for local instances
-	loaded bool        // true once persisted state has been applied from storage
-	local  bool        // true for local (non-shared) instances
+	mu       sync.Mutex
+	state    *rateLimitState
+	pool     *SharedPool // nil for local instances
+	loaded   bool        // true once persisted state has been applied from storage
+	saving   bool        // true once the periodic save goroutine has been started
+	local    bool        // true for local (non-shared) instances
+	stopSave func()      // non-nil when a periodic save goroutine is running
 }
 
 // processRegistry holds all rate limit entries keyed by name. Shared pool
@@ -129,6 +136,9 @@ func getOrRegisterPool(sp *SharedPool, logger *zap.Logger) *registryEntry {
 			zap.String("pool", sp.Name))
 		if entry.state.stopEviction != nil {
 			entry.state.stopEviction()
+		}
+		if entry.stopSave != nil {
+			entry.stopSave()
 		}
 		if len(sp.PerDomainRateLimit) > 0 {
 			candidate.state.startEviction(time.Hour)
@@ -190,6 +200,26 @@ type persistedPoolState struct {
 // poolStorageKey returns the storage key for a named pool.
 func poolStorageKey(name string) string {
 	return "tls_issuer_rate_limit/pools/" + name + ".json"
+}
+
+// startPeriodicSave starts a background goroutine that saves pool state to
+// storage at poolSaveInterval. This bounds the state lost on an unclean exit.
+// Must be called with entry.mu held.
+func (entry *registryEntry) startPeriodicSave(storage certmagic.Storage, logger *zap.Logger) {
+	ctx, cancel := context.WithCancel(context.Background())
+	entry.stopSave = cancel
+	go func() {
+		t := time.NewTicker(poolSaveInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				savePoolState(ctx, storage, entry, logger)
+			}
+		}
+	}()
 }
 
 // loadAndApplyPoolState loads persisted state from storage and merges it into

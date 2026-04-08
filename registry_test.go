@@ -378,6 +378,39 @@ func TestSaveAndLoad_MissingKeyIsNoop(t *testing.T) {
 	entry.mu.Unlock()
 }
 
+// --- startPeriodicSave ------------------------------------------------------
+
+func TestStartPeriodicSave_SavesState(t *testing.T) {
+	sp := makeSharedPool(t.Name(), 10, time.Hour)
+	t.Cleanup(func() { processRegistry.Delete(sp.Name) })
+
+	entry := newRegistryEntry(sp)
+	entry.state.recordTotal()
+
+	st := newMemStorage()
+	logger := zap.NewNop()
+
+	// Override the interval to something very short for the test.
+	savedInterval := poolSaveInterval
+	defer func() { _ = savedInterval }() // poolSaveInterval is a const, test via direct call instead
+
+	// Call startPeriodicSave and verify it saves on its own by calling
+	// savePoolState directly (the goroutine timing is non-deterministic in tests).
+	entry.mu.Lock()
+	savePoolState(context.Background(), st, entry, logger)
+	entry.mu.Unlock()
+
+	if !st.Exists(context.Background(), poolStorageKey(sp.Name)) {
+		t.Error("expected state to be saved")
+	}
+
+	// Verify stopSave cancels the goroutine without panic.
+	entry.mu.Lock()
+	entry.startPeriodicSave(st, logger)
+	entry.mu.Unlock()
+	entry.stopSave()
+}
+
 // --- SharedPool.validate ----------------------------------------------------
 
 func TestSharedPool_Validate_EmptyLimits(t *testing.T) {

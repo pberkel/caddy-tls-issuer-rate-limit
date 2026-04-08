@@ -208,7 +208,8 @@ func (iss *RateLimitIssuer) Provision(ctx caddy.Context) error {
 
 // SetConfig implements caddytls.ConfigSetter. It propagates the certmagic
 // config to the inner issuer and, on first call with a non-nil storage backend,
-// loads persisted state for any configured shared pools.
+// loads persisted state for any configured shared pools and starts a background
+// goroutine to periodically save state.
 func (iss *RateLimitIssuer) SetConfig(cfg *certmagic.Config) {
 	if cs, ok := iss.issuer.(caddytls.ConfigSetter); ok {
 		cs.SetConfig(cfg)
@@ -223,6 +224,10 @@ func (iss *RateLimitIssuer) SetConfig(cfg *certmagic.Config) {
 		if !entry.loaded {
 			loadAndApplyPoolState(ctx, cfg.Storage, entry, iss.logger)
 			entry.loaded = true
+		}
+		if !entry.saving {
+			entry.startPeriodicSave(cfg.Storage, iss.logger)
+			entry.saving = true
 		}
 		entry.mu.Unlock()
 	}

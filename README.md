@@ -184,7 +184,7 @@ shared global {
 
 **Limit changes:** if a pool's limits are changed across a config reload, the in-memory state is reset and a warning is logged.
 
-**Persistence:** shared pool state is saved to Caddy's configured storage backend on shutdown and config reload, and restored on startup. Storage key: `tls_issuer_rate_limit/pools/<name>.json`. Expired timestamps are pruned before saving.
+**Persistence:** shared pool state is saved to Caddy's configured storage backend on shutdown and config reload, and restored on startup. State is also saved periodically every 5 minutes, bounding the data lost on an unclean exit (OOM kill, SIGKILL). Storage key: `tls_issuer_rate_limit/pools/<name>.json`. Expired timestamps are pruned before saving.
 
 ## Admin API
 
