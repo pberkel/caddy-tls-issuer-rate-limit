@@ -190,6 +190,14 @@ func poolLimitsMatch(a, b *SharedPool) bool {
 
 // persistedPoolState is the serialisable form of a pool's sliding window state.
 type persistedPoolState struct {
+	// RateLimit records the pool-wide rate limit configuration at save time.
+	// On load this is compared against the current config; if they differ the
+	// persisted timestamps are discarded rather than being applied to windows
+	// that now have different capacities.
+	RateLimit []*RateLimit `json:"rate_limit,omitempty"`
+	// PerDomainRateLimit records the per-domain rate limit configuration at
+	// save time, used for the same config-change comparison on load.
+	PerDomainRateLimit []*RateLimit `json:"per_domain_rate_limit,omitempty"`
 	// Total holds timestamps for each rate_limit window, ordered to match
 	// the pool's RateLimit slice.
 	Total [][]time.Time `json:"total,omitempty"`
@@ -246,6 +254,16 @@ func loadAndApplyPoolState(ctx context.Context, storage certmagic.Storage, entry
 	if err := json.Unmarshal(data, &ps); err != nil {
 		logger.Warn("failed to decode persisted pool state; starting fresh",
 			zap.String("pool", entry.pool.Name), zap.Error(err))
+		return
+	}
+	stored := &SharedPool{
+		Name:               entry.pool.Name,
+		RateLimit:          ps.RateLimit,
+		PerDomainRateLimit: ps.PerDomainRateLimit,
+	}
+	if !poolLimitsMatch(entry.pool, stored) {
+		logger.Warn("shared pool limits changed since last save; discarding persisted state",
+			zap.String("pool", entry.pool.Name))
 		return
 	}
 	applyPersistedState(entry.state, &ps)
@@ -314,7 +332,12 @@ func savePoolState(ctx context.Context, storage certmagic.Storage, entry *regist
 	}
 	entry.state.mu.Unlock()
 
-	ps := persistedPoolState{Total: global, Domains: domains}
+	ps := persistedPoolState{
+		RateLimit:          entry.pool.RateLimit,
+		PerDomainRateLimit: entry.pool.PerDomainRateLimit,
+		Total:              global,
+		Domains:            domains,
+	}
 	data, err := json.Marshal(ps)
 	if err != nil {
 		logger.Warn("failed to encode pool state",
