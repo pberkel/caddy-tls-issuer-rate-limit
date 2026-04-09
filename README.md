@@ -6,7 +6,7 @@ A [Caddy](https://caddyserver.com) TLS issuer module (`tls.issuance.rate_limit`)
 
 ## Why this module exists
 
-Caddy's on-demand TLS permission module runs before `SubjectTransformer` is applied, meaning it operates on raw hostnames from the TLS handshake rather than actual certificate subjects. For deployments that use wildcard subject transformation (e.g. via [`caddy-issuer-opportunistic`](https://github.com/pberkel/caddy-issuer-opportunistic)), this causes over-counting: `www.example.com` and `api.example.com` each consume a slot even though both result in a single `*.example.com` certificate.
+Caddy's on-demand TLS permission module runs before `SubjectTransformer` is applied, meaning it operates on raw hostnames from the TLS handshake rather than actual certificate subjects. For deployments that use wildcard subject transformation (e.g. via [`caddy-tls-issuer-opportunistic`](https://github.com/pberkel/caddy-tls-issuer-opportunistic)), this causes over-counting: `www.example.com` and `api.example.com` each consume a slot even though both result in a single `*.example.com` certificate.
 
 This module enforces limits at issuance time — after `SubjectTransformer` has run — so counts always reflect actual certificates issued. Hostnames that map to the same wildcard certificate share a single slot rather than each consuming one.
 
@@ -57,7 +57,7 @@ xcaddy build \
                 per_domain_rate_limit   5 6h
                 per_domain_rate_limit  20 24h
             }
-            shared global {                 # shared across all instances
+            shared my_app_limits {          # shared across all instances
                 rate_limit            500 24h
                 per_domain_rate_limit  50 24h
             }
@@ -139,7 +139,7 @@ issuer rate_limit {
                 ],
                 "shared_pools": [
                   {
-                    "name": "global",
+                    "name": "my_app_limits",
                     "rate_limit": [
                       { "limit": 500, "duration": 86400000000000 }
                     ],
