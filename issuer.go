@@ -222,11 +222,13 @@ func (iss *RateLimitIssuer) SetConfig(cfg *certmagic.Config) {
 	for _, entry := range iss.sharedLimiters {
 		entry.mu.Lock()
 		if !entry.loaded {
-			loadAndApplyPoolState(ctx, cfg.Storage, entry, iss.logger)
+			if !entry.pool.Ephemeral {
+				loadAndApplyPoolState(ctx, cfg.Storage, entry, iss.logger)
+			}
 			entry.loaded = true
 		}
 		if !entry.saving {
-			entry.startPeriodicSave(cfg.Storage, iss.logger)
+			entry.startBackground(cfg.Storage, iss.logger)
 			entry.saving = true
 		}
 		entry.mu.Unlock()
@@ -248,7 +250,9 @@ func (iss *RateLimitIssuer) Cleanup() error {
 	}
 	ctx := context.Background()
 	for _, entry := range iss.sharedLimiters {
-		savePoolState(ctx, iss.storage, entry, iss.logger)
+		if !entry.pool.Ephemeral {
+			savePoolState(ctx, iss.storage, entry, iss.logger)
+		}
 	}
 	return nil
 }
@@ -258,11 +262,16 @@ func (iss *RateLimitIssuer) Cleanup() error {
 // challenge infrastructure — then delegates to the inner issuer's PreCheck if
 // present.
 //
+// Renewals (certificates already present in storage) bypass rate limit checks
+// entirely and are never blocked or counted.
+//
 // Rate limit errors are wrapped in certmagic.ErrNoRetry so that the TLS
 // handshake fails immediately rather than blocking in certmagic's obtain loop.
 func (iss *RateLimitIssuer) PreCheck(ctx context.Context, names []string, interactive bool) error {
-	if err := iss.checkRateLimits(names); err != nil {
-		return certmagic.ErrNoRetry{Err: err}
+	if !iss.isRenewal(ctx, names) {
+		if err := iss.checkRateLimits(names); err != nil {
+			return certmagic.ErrNoRetry{Err: err}
+		}
 	}
 	if pc, ok := iss.issuer.(certmagic.PreChecker); ok {
 		return pc.PreCheck(ctx, names, interactive)
@@ -271,15 +280,35 @@ func (iss *RateLimitIssuer) PreCheck(ctx context.Context, names []string, intera
 }
 
 // Issue obtains a certificate via the inner issuer. Rate limit counters are
-// recorded only on successful issuance; a failed issuance does not consume a
-// slot.
+// recorded only on successful new issuances; renewals and failed issuances do
+// not consume a slot.
 func (iss *RateLimitIssuer) Issue(ctx context.Context, csr *x509.CertificateRequest) (*certmagic.IssuedCertificate, error) {
+	renewal := iss.isRenewal(ctx, csr.DNSNames)
 	cert, err := iss.issuer.Issue(ctx, csr)
 	if err != nil {
 		return nil, err
 	}
-	iss.recordIssuance(csr.DNSNames)
+	if !renewal {
+		iss.recordIssuance(csr.DNSNames)
+	}
 	return cert, nil
+}
+
+// isRenewal reports whether a certificate already exists in storage for any of
+// the given names under this issuer, indicating that the upcoming issuance is a
+// renewal rather than a first-time request. When storage is unavailable the
+// result is false — the conservative default is to treat unknown state as new.
+func (iss *RateLimitIssuer) isRenewal(ctx context.Context, names []string) bool {
+	if iss.storage == nil {
+		return false
+	}
+	issuerKey := iss.issuer.IssuerKey()
+	for _, name := range names {
+		if iss.storage.Exists(ctx, certmagic.StorageKeys.SiteCert(issuerKey, name)) {
+			return true
+		}
+	}
+	return false
 }
 
 // IssuerKey delegates to the inner issuer's key for certificate storage namespacing.
@@ -287,23 +316,33 @@ func (iss *RateLimitIssuer) IssuerKey() string {
 	return iss.issuer.IssuerKey()
 }
 
-// GetRenewalInfo implements certmagic.RenewalInfoGetter by delegating to the
-// inner issuer, if it supports ARI. This allows Caddy to fetch ACME Renewal
-// Information (RFC 8739) through the rate_limit wrapper.
+// ErrNotSupported is returned by GetRenewalInfo and Revoke when the inner
+// issuer does not implement the corresponding optional interface.
+var ErrNotSupported = fmt.Errorf("operation not supported by inner issuer")
+
+// GetRenewalInfo delegates to the inner issuer if it implements
+// certmagic.RenewalInfoGetter (ARI, RFC 8739). Returns ErrNotSupported
+// otherwise.
+//
+// Note: because RateLimitIssuer has this method, certmagic will always
+// type-assert it as a RenewalInfoGetter and call through. If the inner issuer
+// does not support ARI, certmagic will log the returned ErrNotSupported at
+// ERROR level and continue — this is certmagic's standard handling for ARI
+// errors and does not affect certificate renewal.
 func (iss *RateLimitIssuer) GetRenewalInfo(ctx context.Context, cert certmagic.Certificate) (acme.RenewalInfo, error) {
 	if rig, ok := iss.issuer.(certmagic.RenewalInfoGetter); ok {
 		return rig.GetRenewalInfo(ctx, cert)
 	}
-	return acme.RenewalInfo{}, fmt.Errorf("inner issuer does not support ARI")
+	return acme.RenewalInfo{}, ErrNotSupported
 }
 
-// Revoke implements certmagic.Revoker by delegating to the inner issuer,
-// if it supports revocation.
+// Revoke delegates to the inner issuer if it implements certmagic.Revoker.
+// Returns ErrNotSupported otherwise.
 func (iss *RateLimitIssuer) Revoke(ctx context.Context, cert certmagic.CertificateResource, reason int) error {
 	if r, ok := iss.issuer.(certmagic.Revoker); ok {
 		return r.Revoke(ctx, cert, reason)
 	}
-	return fmt.Errorf("inner issuer does not support revocation")
+	return ErrNotSupported
 }
 
 // checkRateLimits checks all rate limit windows — local and shared.
@@ -390,13 +429,14 @@ func certDomain(name string) (string, error) {
 }
 
 // Interface guards
+// Note: certmagic.Revoker and certmagic.RenewalInfoGetter are intentionally
+// omitted — these are conditionally delegated to the inner issuer and are not
+// unconditionally satisfied by RateLimitIssuer.
 var (
-	_ caddy.Module                = (*RateLimitIssuer)(nil)
-	_ caddy.Provisioner           = (*RateLimitIssuer)(nil)
-	_ caddy.CleanerUpper          = (*RateLimitIssuer)(nil)
-	_ certmagic.Issuer            = (*RateLimitIssuer)(nil)
-	_ certmagic.PreChecker        = (*RateLimitIssuer)(nil)
-	_ certmagic.Revoker           = (*RateLimitIssuer)(nil)
-	_ certmagic.RenewalInfoGetter = (*RateLimitIssuer)(nil)
-	_ caddytls.ConfigSetter       = (*RateLimitIssuer)(nil)
+	_ caddy.Module          = (*RateLimitIssuer)(nil)
+	_ caddy.Provisioner     = (*RateLimitIssuer)(nil)
+	_ caddy.CleanerUpper    = (*RateLimitIssuer)(nil)
+	_ certmagic.Issuer      = (*RateLimitIssuer)(nil)
+	_ certmagic.PreChecker  = (*RateLimitIssuer)(nil)
+	_ caddytls.ConfigSetter = (*RateLimitIssuer)(nil)
 )

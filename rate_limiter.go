@@ -27,9 +27,9 @@ import (
 // issuances within any rolling Duration window.
 type RateLimit struct {
 	// Maximum number of certificate issuances within Duration.
-	Limit int `json:"limit,omitempty"`
+	Limit int `json:"limit"`
 	// Rolling time window for the rate limit.
-	Duration caddy.Duration `json:"duration,omitempty"`
+	Duration caddy.Duration `json:"duration"`
 }
 
 // rateLimitState holds in-memory exact sliding-window counters for global and
@@ -96,7 +96,7 @@ func (s *rateLimitState) checkTotal() error {
 	now := s.now()
 	for i, rl := range s.totalLimits {
 		if s.totals[i].count(now, time.Duration(rl.Duration)) >= rl.Limit {
-			return fmt.Errorf("global certificate issuance rate limit exceeded")
+			return fmt.Errorf("total certificate issuance rate limit exceeded")
 		}
 	}
 	return nil

@@ -471,3 +471,143 @@ func TestSetConfig_NonSetterInnerIsOK(t *testing.T) {
 	// Should not panic when inner issuer does not implement ConfigSetter.
 	iss.SetConfig(&certmagic.Config{})
 }
+
+// --- isRenewal --------------------------------------------------------------
+
+// storeCert writes a dummy cert file into storage at the path certmagic would
+// use for the given issuer key and domain, simulating an existing certificate.
+func storeCert(t *testing.T, st *memStorage, issuerKey, domain string) {
+	t.Helper()
+	key := certmagic.StorageKeys.SiteCert(issuerKey, domain)
+	if err := st.Store(context.Background(), key, []byte("stub")); err != nil {
+		t.Fatalf("storeCert: %v", err)
+	}
+}
+
+func TestIsRenewal_NoStorage(t *testing.T) {
+	iss := newTestIssuer(&stubIssuer{})
+	// No storage — always reports false (treat as new).
+	if iss.isRenewal(context.Background(), []string{"www.example.com"}) {
+		t.Error("expected false when storage is nil")
+	}
+}
+
+func TestIsRenewal_CertNotInStorage(t *testing.T) {
+	iss := newTestIssuer(&stubIssuer{})
+	iss.storage = newMemStorage()
+	if iss.isRenewal(context.Background(), []string{"www.example.com"}) {
+		t.Error("expected false when cert is absent from storage")
+	}
+}
+
+func TestIsRenewal_CertInStorage(t *testing.T) {
+	iss := newTestIssuer(&stubIssuer{key: "stub-issuer"})
+	st := newMemStorage()
+	iss.storage = st
+	storeCert(t, st, "stub-issuer", "www.example.com")
+
+	if !iss.isRenewal(context.Background(), []string{"www.example.com"}) {
+		t.Error("expected true when cert exists in storage")
+	}
+}
+
+func TestIsRenewal_MatchesAnyName(t *testing.T) {
+	iss := newTestIssuer(&stubIssuer{key: "stub-issuer"})
+	st := newMemStorage()
+	iss.storage = st
+	// Only second name has a cert in storage.
+	storeCert(t, st, "stub-issuer", "api.example.com")
+
+	if !iss.isRenewal(context.Background(), []string{"www.example.com", "api.example.com"}) {
+		t.Error("expected true when any name has a cert in storage")
+	}
+}
+
+// --- PreCheck renewal bypass ------------------------------------------------
+
+func TestPreCheck_RenewalBypassesRateLimit(t *testing.T) {
+	iss := newTestIssuerWithLimits(&stubIssuer{key: "stub-issuer"}, makeRateLimit(1, time.Hour), nil)
+	iss.rateLimiter.recordTotal() // limit exhausted
+
+	// Simulate a renewal by pre-populating storage.
+	st := newMemStorage()
+	iss.storage = st
+	storeCert(t, st, "stub-issuer", "www.example.com")
+
+	// Rate limit is exhausted, but this is a renewal — must not be blocked.
+	if err := iss.PreCheck(context.Background(), []string{"www.example.com"}, false); err != nil {
+		t.Errorf("renewal should bypass rate limit, got: %v", err)
+	}
+}
+
+func TestPreCheck_NewIssuance_StillChecked(t *testing.T) {
+	iss := newTestIssuerWithLimits(&stubIssuer{key: "stub-issuer"}, makeRateLimit(1, time.Hour), nil)
+	iss.rateLimiter.recordTotal() // limit exhausted
+	iss.storage = newMemStorage() // no cert in storage → new issuance
+
+	if err := iss.PreCheck(context.Background(), []string{"www.example.com"}, false); err == nil {
+		t.Error("expected rate limit error for new issuance when limit exhausted")
+	}
+}
+
+// --- Issue renewal not counted ----------------------------------------------
+
+func TestIssue_RenewalNotCounted(t *testing.T) {
+	iss := newTestIssuerWithLimits(&stubIssuer{key: "stub-issuer"}, makeRateLimit(100, time.Hour), nil)
+	st := newMemStorage()
+	iss.storage = st
+	storeCert(t, st, "stub-issuer", "www.example.com")
+
+	if _, err := iss.Issue(context.Background(), &x509.CertificateRequest{
+		DNSNames: []string{"www.example.com"},
+	}); err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	iss.rateLimiter.mu.Lock()
+	count := iss.rateLimiter.totals[0].count(time.Now(), time.Hour)
+	iss.rateLimiter.mu.Unlock()
+
+	if count != 0 {
+		t.Errorf("total count after renewal = %d, want 0", count)
+	}
+}
+
+func TestIssue_NewIssuance_IsCounted(t *testing.T) {
+	iss := newTestIssuerWithLimits(&stubIssuer{key: "stub-issuer"}, makeRateLimit(100, time.Hour), nil)
+	iss.storage = newMemStorage() // no cert in storage → new issuance
+
+	if _, err := iss.Issue(context.Background(), &x509.CertificateRequest{
+		DNSNames: []string{"www.example.com"},
+	}); err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	iss.rateLimiter.mu.Lock()
+	count := iss.rateLimiter.totals[0].count(time.Now(), time.Hour)
+	iss.rateLimiter.mu.Unlock()
+
+	if count != 1 {
+		t.Errorf("total count after new issuance = %d, want 1", count)
+	}
+}
+
+func TestIssue_NoStorage_CountedAsNew(t *testing.T) {
+	// When storage is unavailable, conservative default: treat as new and count.
+	iss := newTestIssuerWithLimits(&stubIssuer{key: "stub-issuer"}, makeRateLimit(100, time.Hour), nil)
+	// iss.storage is nil
+
+	if _, err := iss.Issue(context.Background(), &x509.CertificateRequest{
+		DNSNames: []string{"www.example.com"},
+	}); err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	iss.rateLimiter.mu.Lock()
+	count := iss.rateLimiter.totals[0].count(time.Now(), time.Hour)
+	iss.rateLimiter.mu.Unlock()
+
+	if count != 1 {
+		t.Errorf("total count when storage unavailable = %d, want 1", count)
+	}
+}

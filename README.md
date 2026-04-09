@@ -14,8 +14,8 @@ This module enforces limits at issuance time — after `SubjectTransformer` has 
 
 The module wraps an inner issuer and intercepts the issuance lifecycle at two points:
 
-1. **`PreCheck`** — fast in-memory checks (rate limit windows) reject requests before the inner issuer sets up challenge infrastructure. Rate limit errors are wrapped in `certmagic.ErrNoRetry` so the TLS handshake fails immediately rather than blocking in certmagic's obtain loop.
-2. **`Issue`** — delegates to the inner issuer. Counters are recorded **only on successful issuance**; a failed issuance does not consume a slot.
+1. **`PreCheck`** — checks whether the request is a renewal (certificate already present in storage) or a new issuance. Renewals bypass all rate limit checks and are never blocked. For new issuances, fast in-memory checks reject requests before the inner issuer sets up challenge infrastructure. Rate limit errors are wrapped in `certmagic.ErrNoRetry` so the TLS handshake fails immediately rather than blocking in certmagic's obtain loop.
+2. **`Issue`** — delegates to the inner issuer. Counters are recorded **only on successful new issuances**; renewals and failed issuances do not consume a slot.
 
 Other certmagic interfaces are delegated to the inner issuer transparently:
 
@@ -51,10 +51,12 @@ xcaddy build \
             issuer acme {
                 dir https://acme-v02.api.letsencrypt.org/directory
             }
-            rate_limit             30 10m   # local
-            rate_limit            300 24h   # local
-            per_domain_rate_limit   5 6h    # local per-domain
-            per_domain_rate_limit  20 24h   # local per-domain
+            local {                         # local to this instance
+                rate_limit             30 10m
+                rate_limit            300 24h
+                per_domain_rate_limit   5 6h
+                per_domain_rate_limit  20 24h
+            }
             shared global {                 # shared across all instances
                 rate_limit            500 24h
                 per_domain_rate_limit  50 24h
@@ -68,10 +70,12 @@ xcaddy build \
 #### Syntax
 
 ```
-issuer rate_limit [<id>] {
+issuer rate_limit {
     issuer <module> { ... }
-    rate_limit <limit> <duration>
-    per_domain_rate_limit <limit> <duration>
+    local [<name>] {
+        rate_limit <limit> <duration>
+        per_domain_rate_limit <limit> <duration>
+    }
     shared <name> {
         rate_limit <limit> <duration>
         per_domain_rate_limit <limit> <duration>
@@ -79,16 +83,20 @@ issuer rate_limit [<id>] {
 }
 ```
 
-The optional `<id>` is a stable identifier for this instance used as the key in the admin registry (see [Admin API](#admin-api)). If omitted, a UUID is generated at provision time. Must be unique across all `rate_limit` issuer instances in the process.
-
 #### Subdirectives
 
 | Subdirective | Required | Description |
 |---|---|---|
 | `issuer <module> { ... }` | Yes | Inner issuer to delegate certificate issuance to. Any `tls.issuance` module is accepted. |
-| `rate_limit <limit> <duration>` | No | Maximum new certificates across all domains within a rolling time window (e.g. `100 1h`). Local to this instance. May be repeated for tiered limits; all windows must have capacity. |
-| `per_domain_rate_limit <limit> <duration>` | No | Maximum new certificates per registrable domain within a rolling time window (e.g. `5 6h`). Local to this instance. May be repeated for tiered limits. |
+| `local [<name>] { ... }` | No | Local rate limits scoped to this instance. The optional `<name>` is a stable identifier used as the key in the admin registry (see [Admin API](#admin-api)); if omitted, a UUID is generated at provision time. May appear at most once. |
 | `shared <name> { ... }` | No | Named shared pool. Rate limit state is shared across all `rate_limit` instances referencing the same name and persisted across restarts. May be repeated for multiple pools. See [Shared pools](#shared-pools) below. |
+
+#### `local` block subdirectives
+
+| Subdirective | Description |
+|---|---|
+| `rate_limit <limit> <duration>` | Maximum new certificates across all domains within a rolling time window (e.g. `100 1h`). May be repeated for tiered limits; all windows must have capacity. |
+| `per_domain_rate_limit <limit> <duration>` | Maximum new certificates per registrable domain within a rolling time window (e.g. `5 6h`). May be repeated for tiered limits. |
 
 #### `shared` block subdirectives
 
@@ -154,6 +162,8 @@ Duration values are in nanoseconds.
 
 ## Rate limit behaviour
 
+Rate limits apply only to **new certificate issuances**. Renewals — requests where a certificate for the subject already exists in Caddy's storage — bypass all checks and are never blocked or counted. This ensures that rate limit exhaustion from a burst of new domains cannot prevent existing certificates from renewing.
+
 Rate limits are enforced per registrable domain (eTLD+1). Because limits apply after `SubjectTransformer` has run, hostnames that map to the same wildcard certificate share a single slot:
 
 - `www.example.com` and `api.example.com` both transforming to `*.example.com` count as one issuance against the `example.com` per-domain limit.
@@ -200,7 +210,7 @@ This module registers an admin API handler (`admin.api.rate_limit_issuer`) that 
 | `DELETE` | `/rate_limit_issuer/pools/<name>/domains/<domain>` | Reset per-domain windows for one domain |
 | `DELETE` | `/rate_limit_issuer/pools/<name>` | Reset all windows (total and per-domain) |
 
-The `<name>` for a local instance is its configured `instance_id`, or the auto-generated UUID if none was set.
+The `<name>` for a local instance is the name given in the `local` block (or `instance_id` in JSON config), or the auto-generated UUID if none was set.
 
 ### Accessing the admin UI via a site block
 
@@ -248,10 +258,12 @@ For on-demand TLS deployments, use [`caddy-tls-permission-policy`](https://githu
             issuer acme {
                 dir https://acme-v02.api.letsencrypt.org/directory
             }
-            rate_limit             30 10m
-            rate_limit            300 24h
-            per_domain_rate_limit   5 6h
-            per_domain_rate_limit  20 24h
+            local {
+                rate_limit             30 10m
+                rate_limit            300 24h
+                per_domain_rate_limit   5 6h
+                per_domain_rate_limit  20 24h
+            }
             shared global {
                 rate_limit            500 24h
                 per_domain_rate_limit  50 24h

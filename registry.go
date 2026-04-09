@@ -55,6 +55,10 @@ type SharedPool struct {
 	// enforces an independent sliding window per domain; all windows must have
 	// capacity. Multiple entries allow tiered limits.
 	PerDomainRateLimit []*RateLimit `json:"per_domain_rate_limit,omitempty"`
+
+	// When true, pool state is not loaded from or saved to storage. Windows
+	// are reset on every process restart. Default false (persistent).
+	Ephemeral bool `json:"ephemeral,omitempty"`
 }
 
 func (sp *SharedPool) validate() error {
@@ -109,13 +113,13 @@ const poolSaveInterval = 5 * time.Minute
 // local instance entries (local == true) are removed from processRegistry when
 // the owning RateLimitIssuer is cleaned up.
 type registryEntry struct {
-	mu       sync.Mutex
-	state    *rateLimitState
-	pool     *SharedPool // nil for local instances
-	loaded   bool        // true once persisted state has been applied from storage
-	saving   bool        // true once the periodic save goroutine has been started
-	local    bool        // true for local (non-shared) instances
-	stopSave func()      // non-nil when a periodic save goroutine is running
+	mu             sync.Mutex
+	state          *rateLimitState
+	pool           *SharedPool // nil for local instances
+	loaded         bool        // true once persisted state has been applied from storage
+	saving         bool        // true once the background goroutine has been started
+	local          bool        // true for local (non-shared) instances
+	stopBackground func()      // non-nil when the background goroutine is running
 }
 
 // processRegistry holds all rate limit entries keyed by name. Shared pool
@@ -134,20 +138,11 @@ func getOrRegisterPool(sp *SharedPool, logger *zap.Logger) *registryEntry {
 	if loaded && !poolLimitsMatch(entry.pool, sp) {
 		logger.Warn("shared pool limits changed; resetting rate limit state",
 			zap.String("pool", sp.Name))
-		if entry.state.stopEviction != nil {
-			entry.state.stopEviction()
-		}
-		if entry.stopSave != nil {
-			entry.stopSave()
-		}
-		if len(sp.PerDomainRateLimit) > 0 {
-			candidate.state.startEviction(time.Hour)
+		if entry.stopBackground != nil {
+			entry.stopBackground()
 		}
 		processRegistry.Store(sp.Name, candidate)
 		return candidate
-	}
-	if !loaded && len(sp.PerDomainRateLimit) > 0 {
-		candidate.state.startEviction(time.Hour)
 	}
 	return entry
 }
@@ -189,9 +184,9 @@ func poolLimitsMatch(a, b *SharedPool) bool {
 
 // persistedPoolState is the serialisable form of a pool's sliding window state.
 type persistedPoolState struct {
-	// Global holds timestamps for each rate_limit window, ordered to match
+	// Total holds timestamps for each rate_limit window, ordered to match
 	// the pool's RateLimit slice.
-	Global [][]time.Time `json:"global,omitempty"`
+	Total [][]time.Time `json:"total,omitempty"`
 	// Domains maps registrable domain to per_domain_rate_limit window
 	// timestamps, ordered to match the pool's PerDomainRateLimit slice.
 	Domains map[string][][]time.Time `json:"domains,omitempty"`
@@ -202,20 +197,28 @@ func poolStorageKey(name string) string {
 	return "tls_issuer_rate_limit/pools/" + name + ".json"
 }
 
-// startPeriodicSave starts a background goroutine that saves pool state to
-// storage at poolSaveInterval. This bounds the state lost on an unclean exit.
-// Must be called with entry.mu held.
-func (entry *registryEntry) startPeriodicSave(storage certmagic.Storage, logger *zap.Logger) {
+// startBackground starts a single background goroutine that handles both
+// periodic state persistence (every poolSaveInterval) and eviction of expired
+// per-domain windows (every hour). Must be called with entry.mu held.
+func (entry *registryEntry) startBackground(storage certmagic.Storage, logger *zap.Logger) {
 	ctx, cancel := context.WithCancel(context.Background())
-	entry.stopSave = cancel
+	entry.stopBackground = cancel
 	go func() {
-		t := time.NewTicker(poolSaveInterval)
-		defer t.Stop()
+		evictTicker := time.NewTicker(time.Hour)
+		defer evictTicker.Stop()
+		var saveC <-chan time.Time
+		if !entry.pool.Ephemeral {
+			saveTicker := time.NewTicker(poolSaveInterval)
+			defer saveTicker.Stop()
+			saveC = saveTicker.C
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-evictTicker.C:
+				entry.state.evictExpiredDomains()
+			case <-saveC:
 				savePoolState(ctx, storage, entry, logger)
 			}
 		}
@@ -249,8 +252,8 @@ func applyPersistedState(state *rateLimitState, ps *persistedPoolState) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for i := range state.totals {
-		if i < len(ps.Global) {
-			state.totals[i].timestamps = append(state.totals[i].timestamps, ps.Global[i]...)
+		if i < len(ps.Total) {
+			state.totals[i].timestamps = append(state.totals[i].timestamps, ps.Total[i]...)
 		}
 	}
 	for domain, windowTimestamps := range ps.Domains {
@@ -305,7 +308,7 @@ func savePoolState(ctx context.Context, storage certmagic.Storage, entry *regist
 	}
 	entry.state.mu.Unlock()
 
-	ps := persistedPoolState{Global: global, Domains: domains}
+	ps := persistedPoolState{Total: global, Domains: domains}
 	data, err := json.Marshal(ps)
 	if err != nil {
 		logger.Warn("failed to encode pool state",

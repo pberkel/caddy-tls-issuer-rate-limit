@@ -226,7 +226,7 @@ func TestApplyPersistedState_GlobalTimestamps(t *testing.T) {
 	now := time.Now()
 
 	ps := &persistedPoolState{
-		Global: [][]time.Time{{now.Add(-30 * time.Minute), now.Add(-10 * time.Minute)}},
+		Total: [][]time.Time{{now.Add(-30 * time.Minute), now.Add(-10 * time.Minute)}},
 	}
 	applyPersistedState(entry.state, ps)
 
@@ -245,7 +245,7 @@ func TestApplyPersistedState_ExpiredTimestampsIgnored(t *testing.T) {
 	now := time.Now()
 
 	ps := &persistedPoolState{
-		Global: [][]time.Time{{now.Add(-2 * time.Hour)}}, // expired
+		Total: [][]time.Time{{now.Add(-2 * time.Hour)}}, // expired
 	}
 	applyPersistedState(entry.state, ps)
 
@@ -265,7 +265,7 @@ func TestApplyPersistedState_ExtraWindowsIgnored(t *testing.T) {
 	now := time.Now()
 
 	ps := &persistedPoolState{
-		Global: [][]time.Time{
+		Total: [][]time.Time{
 			{now.Add(-10 * time.Minute)},
 			{now.Add(-5 * time.Minute)}, // no corresponding window in config
 		},
@@ -406,9 +406,9 @@ func TestStartPeriodicSave_SavesState(t *testing.T) {
 
 	// Verify stopSave cancels the goroutine without panic.
 	entry.mu.Lock()
-	entry.startPeriodicSave(st, logger)
+	entry.startBackground(st, logger)
 	entry.mu.Unlock()
-	entry.stopSave()
+	entry.stopBackground()
 }
 
 // --- SharedPool.validate ----------------------------------------------------

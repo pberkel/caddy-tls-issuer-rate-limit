@@ -28,35 +28,49 @@ import (
 //
 // Syntax:
 //
-//	issuer rate_limit [<id>] {
+//	issuer rate_limit {
 //	    issuer <module> { ... }
-//	    rate_limit <limit> <duration>
-//	    per_domain_rate_limit <limit> <duration>
+//	    local [<name>] {
+//	        rate_limit <limit> <duration>
+//	        per_domain_rate_limit <limit> <duration>
+//	    }
+//	    shared <name> {
+//	        rate_limit <limit> <duration>
+//	        per_domain_rate_limit <limit> <duration>
+//	    }
 //	}
 //
-// id is an optional stable identifier for this instance used as the key in
-// the admin registry. If omitted, a UUID is generated at provision time.
-// issuer is required. rate_limit and per_domain_rate_limit may be repeated
-// for tiered limits; all windows must have capacity for issuance to proceed.
+// issuer is required. local and shared blocks are optional and may each be
+// repeated. Multiple local blocks accumulate into a single local limiter —
+// useful for splitting total and per-domain limits across separate blocks.
+// rate_limit and per_domain_rate_limit may be repeated within any block for
+// tiered limits; all windows must have capacity for issuance to proceed.
+//
+// The optional <name> in any local block is a stable identifier used as the
+// key in the admin registry. At most one local block may specify a name; if
+// omitted across all local blocks, a UUID is generated at provision time.
 //
 // Example:
 //
-//	issuer rate_limit my-issuer {
+//	issuer rate_limit {
 //	    issuer acme {
 //	        dir https://acme-v02.api.letsencrypt.org/directory
 //	    }
-//	    rate_limit   100 1h
-//	    rate_limit   500 24h
-//	    per_domain_rate_limit 5  6h
-//	    per_domain_rate_limit 20 24h
+//	    local my-issuer {
+//	        rate_limit   100 1h
+//	        rate_limit   500 24h
+//	        per_domain_rate_limit 5  6h
+//	        per_domain_rate_limit 20 24h
+//	    }
+//	    shared global {
+//	        rate_limit            500 24h
+//	        per_domain_rate_limit  50 24h
+//	    }
 //	}
 func (iss *RateLimitIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.Next() // consume "rate_limit"
 	if d.NextArg() {
-		iss.InstanceID = d.Val()
-		if d.NextArg() {
-			return d.ArgErr()
-		}
+		return d.ArgErr()
 	}
 
 	for nesting := d.Nesting(); d.NextBlock(nesting); {
@@ -71,27 +85,42 @@ func (iss *RateLimitIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 			iss.IssuerRaw = raw
 
-		case "rate_limit":
-			args := d.RemainingArgs()
-			if len(args) != 2 {
-				return d.Err("rate_limit requires exactly two arguments: <limit> <duration>")
+		case "local":
+			if d.NextArg() {
+				if iss.InstanceID != "" {
+					return d.Err("local name already specified by a previous local block")
+				}
+				iss.InstanceID = d.Val()
+				if d.NextArg() {
+					return d.ArgErr()
+				}
 			}
-			rl, err := makeCaddyRateLimit(d, args[0], args[1])
-			if err != nil {
-				return err
+			for nesting := d.Nesting(); d.NextBlock(nesting); {
+				switch d.Val() {
+				case "rate_limit":
+					args := d.RemainingArgs()
+					if len(args) != 2 {
+						return d.Err("rate_limit requires exactly two arguments: <limit> <duration>")
+					}
+					rl, err := makeCaddyRateLimit(d, args[0], args[1])
+					if err != nil {
+						return err
+					}
+					iss.RateLimit = append(iss.RateLimit, rl)
+				case "per_domain_rate_limit":
+					args := d.RemainingArgs()
+					if len(args) != 2 {
+						return d.Err("per_domain_rate_limit requires exactly two arguments: <limit> <duration>")
+					}
+					rl, err := makeCaddyRateLimit(d, args[0], args[1])
+					if err != nil {
+						return err
+					}
+					iss.PerDomainRateLimit = append(iss.PerDomainRateLimit, rl)
+				default:
+					return d.Errf("unknown subdirective '%s'", d.Val())
+				}
 			}
-			iss.RateLimit = append(iss.RateLimit, rl)
-
-		case "per_domain_rate_limit":
-			args := d.RemainingArgs()
-			if len(args) != 2 {
-				return d.Err("per_domain_rate_limit requires exactly two arguments: <limit> <duration>")
-			}
-			rl, err := makeCaddyRateLimit(d, args[0], args[1])
-			if err != nil {
-				return err
-			}
-			iss.PerDomainRateLimit = append(iss.PerDomainRateLimit, rl)
 
 		case "shared":
 			if !d.NextArg() {
@@ -123,6 +152,22 @@ func (iss *RateLimitIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 						return err
 					}
 					sp.PerDomainRateLimit = append(sp.PerDomainRateLimit, rl)
+				case "ephemeral":
+					if d.NextArg() {
+						switch d.Val() {
+						case "true":
+							sp.Ephemeral = true
+						case "false":
+							sp.Ephemeral = false
+						default:
+							return d.Errf("ephemeral must be true or false, got %q", d.Val())
+						}
+						if d.NextArg() {
+							return d.ArgErr()
+						}
+					} else {
+						sp.Ephemeral = true
+					}
 				default:
 					return d.Errf("unknown subdirective '%s'", d.Val())
 				}

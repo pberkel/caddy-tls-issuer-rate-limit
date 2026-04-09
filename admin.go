@@ -286,7 +286,11 @@ function barClass(count, limit) {
   const p = count / limit;
   return p >= 1 ? 'crit' : p >= 0.8 ? 'warn' : '';
 }
-function windowBar(w) {
+function mostConstrained(windows) {
+  return windows.reduce((a, b) => (b.count / b.limit > a.count / a.limit ? b : a), windows[0]);
+}
+function windowBar(windows) {
+  const w = mostConstrained(windows);
   const cls = barClass(w.count, w.limit);
   const pct = Math.min(100, Math.round(w.count / w.limit * 100));
   return '<div class="bar-wrap"><div class="bar"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div></div>';
@@ -303,11 +307,10 @@ function fmtReset(iso) {
 }
 function renderGlobal(name, windows) {
   if (!windows || windows.length === 0) return '';
-  const first = windows[0] || {count:0,limit:1,duration:''};
   const row = '<tr>' +
     '<td class="count-cell">' + windows.map(w => w.count+'/'+w.limit).join(', ') + '</td>' +
     '<td>' + windows.map(w => esc(w.duration)).join(', ') + '</td>' +
-    '<td>' + windowBar(first) + '</td>' +
+    '<td>' + windowBar(windows) + '</td>' +
     '<td>' + windows.map(w => fmtReset(w.reset_at)).join(', ') + '</td>' +
     '<td class="action"><button onclick="resetTotal(' + jsonAttr(name) + ')">Reset</button></td></tr>';
   return '<div class="section-label">Total</div>' +
@@ -317,11 +320,10 @@ function renderDomains(name, domains) {
   if (!domains || Object.keys(domains).length === 0) return '';
   const sorted = Object.entries(domains).sort((a, b) => a[0].localeCompare(b[0]));
   const rows = sorted.map(([domain, windows]) => {
-    const first = windows[0] || {count:0,limit:1,duration:''};
     return '<tr><td>' + esc(domain) + '</td>' +
       '<td class="count-cell">' + windows.map(w => w.count+'/'+w.limit).join(', ') + '</td>' +
       '<td>' + windows.map(w => esc(w.duration)).join(', ') + '</td>' +
-      '<td>' + windowBar(first) + '</td>' +
+      '<td>' + windowBar(windows) + '</td>' +
       '<td>' + windows.map(w => fmtReset(w.reset_at)).join(', ') + '</td>' +
       '<td class="action"><button onclick="resetDomain(' + jsonAttr(name) + ',' + jsonAttr(domain) + ')">Reset</button></td></tr>';
   }).join('');
@@ -360,14 +362,14 @@ async function load() {
 async function resetAll(name) {
   if (!confirm('Reset all windows for \u201c' + name + '\u201d?')) return;
   const r = await fetch(base + '/pools/' + encodeURIComponent(name), {method: 'DELETE'});
-  if (!r.ok && r.status !== 204) alert('Reset failed: HTTP ' + r.status);
+  if (!r.ok) alert('Reset failed: HTTP ' + r.status);
   await load();
 }
 
 async function resetTotal(name) {
   if (!confirm('Reset total windows for \u201c' + name + '\u201d?')) return;
   const r = await fetch(base + '/pools/' + encodeURIComponent(name) + '/total', {method: 'DELETE'});
-  if (!r.ok && r.status !== 204) alert('Reset failed: HTTP ' + r.status);
+  if (!r.ok) alert('Reset failed: HTTP ' + r.status);
   await load();
 }
 
@@ -377,7 +379,7 @@ async function resetDomain(name, domain) {
     base + '/pools/' + encodeURIComponent(name) + '/domains/' + encodeURIComponent(domain),
     {method: 'DELETE'}
   );
-  if (!r.ok && r.status !== 204) alert('Reset failed: HTTP ' + r.status);
+  if (!r.ok) alert('Reset failed: HTTP ' + r.status);
   await load();
 }
 
