@@ -1,4 +1,4 @@
-# caddy-issuer-rate-limit
+# caddy-tls-issuer-rate-limit
 
 A [Caddy](https://caddyserver.com) TLS issuer module (`tls.issuance.rate_limit`) that wraps any inner issuer and enforces configurable certificate issuance rate limits.
 
@@ -28,7 +28,7 @@ Build Caddy with this module using [`xcaddy`](https://github.com/caddyserver/xca
 
 ```sh
 xcaddy build \
-  --with github.com/pberkel/caddy-issuer-rate-limit
+  --with github.com/pberkel/caddy-tls-issuer-rate-limit
 ```
 
 ## Configuration

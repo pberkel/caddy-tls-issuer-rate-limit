@@ -1,4 +1,4 @@
-module github.com/pberkel/caddy-issuer-rate-limit
+module github.com/pberkel/caddy-tls-issuer-rate-limit
 
 go 1.25.0
 
