@@ -34,16 +34,16 @@ func init() {
 //
 // Routes:
 //
-//	GET    /rate_limit_issuer/          - HTML web interface
-//	GET    /rate_limit_issuer/pools     - JSON status of all shared pools
-//	DELETE /rate_limit_issuer/pools/{name}                  - reset all windows for a pool
-//	DELETE /rate_limit_issuer/pools/{name}/domains/{domain} - reset per-domain windows
+//	GET    /rate_limit_tls_issuer/          - HTML web interface
+//	GET    /rate_limit_tls_issuer/pools     - JSON status of all shared pools
+//	DELETE /rate_limit_tls_issuer/pools/{name}                  - reset all windows for a pool
+//	DELETE /rate_limit_tls_issuer/pools/{name}/domains/{domain} - reset per-domain windows
 type RateLimitAdmin struct{}
 
 // CaddyModule returns the Caddy module information.
 func (RateLimitAdmin) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
-		ID:  "admin.api.rate_limit_issuer",
+		ID:  "admin.api.rate_limit_tls_issuer",
 		New: func() caddy.Module { return new(RateLimitAdmin) },
 	}
 }
@@ -52,7 +52,7 @@ func (RateLimitAdmin) CaddyModule() caddy.ModuleInfo {
 func (a RateLimitAdmin) Routes() []caddy.AdminRoute {
 	return []caddy.AdminRoute{
 		{
-			Pattern: "/rate_limit_issuer/",
+			Pattern: "/rate_limit_tls_issuer/",
 			Handler: caddy.AdminHandlerFunc(a.handleRequest),
 		},
 	}
@@ -61,7 +61,7 @@ func (a RateLimitAdmin) Routes() []caddy.AdminRoute {
 // handleRequest dispatches incoming admin requests by method and path.
 func (a RateLimitAdmin) handleRequest(w http.ResponseWriter, r *http.Request) error {
 	// Strip the registered prefix to get the local path.
-	local := strings.TrimPrefix(r.URL.Path, "/rate_limit_issuer")
+	local := strings.TrimPrefix(r.URL.Path, "/rate_limit_tls_issuer")
 	local = strings.TrimPrefix(local, "/")
 	local = strings.TrimSuffix(local, "/")
 
@@ -217,13 +217,13 @@ func entryToStatus(name string, entry *registryEntry) PoolStatus {
 // Interface guard
 var _ caddy.AdminRouter = RateLimitAdmin{}
 
-// adminHTML is the self-contained web interface served at /rate_limit_issuer/.
+// adminHTML is the self-contained web interface served at /rate_limit_tls_issuer/.
 const adminHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rate Limit Issuer</title>
+<title>Rate Limit TLS Issuer</title>
 <style>
 * { box-sizing: border-box; }
 body { font-family: system-ui, sans-serif; margin: 0; background: #f0f2f5; color: #222; }
@@ -258,7 +258,7 @@ td.action { text-align: right; }
 </head>
 <body>
 <header>
-  <h1>Rate Limit Issuer</h1>
+  <h1>Rate Limit TLS Issuer</h1>
   <span id="refresh-status">Loading&hellip;</span>
 </header>
 <main>

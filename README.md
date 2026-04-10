@@ -2,8 +2,6 @@
 
 A [Caddy](https://caddyserver.com) TLS issuer module (`tls.issuance.rate_limit`) that wraps any inner issuer and enforces configurable certificate issuance rate limits.
 
-> **Experimental:** The configuration interface may change before a stable release.
-
 ## Why this module exists
 
 Caddy's on-demand TLS permission module runs before `SubjectTransformer` is applied, meaning it operates on raw hostnames from the TLS handshake rather than actual certificate subjects. For deployments that use wildcard subject transformation (e.g. via [`caddy-tls-issuer-opportunistic`](https://github.com/pberkel/caddy-tls-issuer-opportunistic)), this causes over-counting: `www.example.com` and `api.example.com` each consume a slot even though both result in a single `*.example.com` certificate.
@@ -28,7 +26,8 @@ Build Caddy with this module using [`xcaddy`](https://github.com/caddyserver/xca
 
 ```sh
 xcaddy build \
-  --with github.com/pberkel/caddy-tls-issuer-rate-limit
+  --with github.com/pberkel/caddy-tls-issuer-rate-limit \
+  --with github.com/pberkel/caddy-tls-permission-policy
 ```
 
 ## Configuration
@@ -38,8 +37,8 @@ xcaddy build \
 ```caddyfile
 {
     on_demand_tls {
-        permission http {
-            endpoint https://auth.example.internal/check
+        permission policy {
+            resolves_to my-caddy-server.example.net
         }
     }
 }
@@ -115,8 +114,8 @@ issuer rate_limit {
       "automation": {
         "on_demand": {
           "permission": {
-            "module": "http",
-            "endpoint": "https://auth.example.internal/check"
+            "module": "policy",
+            "resolves_to": ["my-caddy-server.example.net"]
           }
         },
         "policies": [
@@ -193,7 +192,7 @@ shared global {
 
 **Multiple instances:** an issuance must satisfy **all** configured limits — local and shared — to proceed.
 
-**Limit changes:** if a pool's limits are changed across a config reload, the in-memory state is reset and a warning is logged.
+**Limit changes:** if a pool's limits differ from the stored configuration — whether detected at startup (comparing against persisted state) or during a config reload (comparing against in-memory state) — the windows are reset and a warning is logged.
 
 **Persistence:** shared pool state is saved to Caddy's configured storage backend on shutdown and config reload, and restored on startup. State is also saved periodically every 5 minutes, bounding the data lost on an unclean exit (OOM kill, SIGKILL). Storage key: `tls_issuer_rate_limit/pools/<name>.json`. Expired timestamps are pruned before saving.
 
@@ -220,17 +219,17 @@ An ephemeral pool's windows reset to zero on every process restart. No state is 
 
 ## Admin API
 
-This module registers an admin API handler (`admin.api.rate_limit_issuer`) that exposes rate limit state for all local instances and shared pools in the process.
+This module registers an admin API handler (`admin.api.rate_limit_tls_issuer`) that exposes rate limit state for all local instances and shared pools in the process.
 
 ### Routes
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/rate_limit_issuer/` | Self-contained web interface |
-| `GET` | `/rate_limit_issuer/pools` | JSON status of all instances and pools |
-| `DELETE` | `/rate_limit_issuer/pools/<name>/total` | Reset total (cross-domain) windows |
-| `DELETE` | `/rate_limit_issuer/pools/<name>/domains/<domain>` | Reset per-domain windows for one domain |
-| `DELETE` | `/rate_limit_issuer/pools/<name>` | Reset all windows (total and per-domain) |
+| `GET` | `/rate_limit_tls_issuer/` | Self-contained web interface |
+| `GET` | `/rate_limit_tls_issuer/pools` | JSON status of all instances and pools |
+| `DELETE` | `/rate_limit_tls_issuer/pools/<name>/total` | Reset total (cross-domain) windows |
+| `DELETE` | `/rate_limit_tls_issuer/pools/<name>/domains/<domain>` | Reset per-domain windows for one domain |
+| `DELETE` | `/rate_limit_tls_issuer/pools/<name>` | Reset all windows (total and per-domain) |
 
 The `<name>` for a local instance is the name given in the `local` block (or `instance_id` in JSON config), or the auto-generated UUID if none was set.
 
@@ -257,7 +256,7 @@ admin.example.com {
 }
 ```
 
-`handle_path` strips the `/admin` prefix before proxying, so `/admin/rate_limit_issuer/` is forwarded as `/rate_limit_issuer/`. The `origins` directive allows the admin API to accept requests with that `Host` header.
+`handle_path` strips the `/admin` prefix before proxying, so `/admin/rate_limit_tls_issuer/` is forwarded as `/rate_limit_tls_issuer/`. The `origins` directive allows the admin API to accept requests with that `Host` header.
 
 ## Recommended usage with caddy-tls-permission-policy
 

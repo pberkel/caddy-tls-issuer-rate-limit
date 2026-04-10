@@ -91,10 +91,10 @@ func poolByName(t *testing.T, pools []PoolStatus, name string) PoolStatus {
 	return PoolStatus{}
 }
 
-// --- GET /rate_limit_issuer/ ------------------------------------------------
+// --- GET /rate_limit_tls_issuer/ ------------------------------------------------
 
 func TestAdmin_GetUI_ReturnsHTML(t *testing.T) {
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/")
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
@@ -107,10 +107,10 @@ func TestAdmin_GetUI_ReturnsHTML(t *testing.T) {
 	}
 }
 
-// --- GET /rate_limit_issuer/pools -------------------------------------------
+// --- GET /rate_limit_tls_issuer/pools -------------------------------------------
 
 func TestAdmin_GetPools_Empty(t *testing.T) {
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/pools")
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
@@ -125,7 +125,7 @@ func TestAdmin_GetPools_SharedPool(t *testing.T) {
 	entry := registerAdminPool(t, t.Name(), 10, time.Hour)
 	entry.state.recordTotal()
 
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/pools")
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
@@ -149,7 +149,7 @@ func TestAdmin_GetPools_SharedPool(t *testing.T) {
 func TestAdmin_GetPools_LocalInstance(t *testing.T) {
 	registerLocalEntry(t, t.Name(), 5, time.Hour)
 
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/pools")
 	pools := decodePools(t, rec)
 	p := poolByName(t, pools, t.Name())
 
@@ -162,7 +162,7 @@ func TestAdmin_GetPools_ResetAt_PopulatedAtLimit(t *testing.T) {
 	entry := registerAdminPool(t, t.Name(), 1, time.Hour)
 	entry.state.recordTotal() // at limit — oldest slot defines reset time
 
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/pools")
 	pools := decodePools(t, rec)
 	p := poolByName(t, pools, t.Name())
 
@@ -180,7 +180,7 @@ func TestAdmin_GetPools_PerDomainWindows(t *testing.T) {
 	entry := getOrRegisterPool(sp, zap.NewNop())
 	entry.state.recordDomain("example.com")
 
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/pools")
 	pools := decodePools(t, rec)
 	p := poolByName(t, pools, t.Name())
 
@@ -200,7 +200,7 @@ func TestAdmin_GetPools_SortedByName(t *testing.T) {
 	registerAdminPool(t, t.Name()+"_z", 10, time.Hour)
 	registerAdminPool(t, t.Name()+"_a", 10, time.Hour)
 
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/pools")
 	pools := decodePools(t, rec)
 
 	var names []string
@@ -217,14 +217,14 @@ func TestAdmin_GetPools_SortedByName(t *testing.T) {
 	}
 }
 
-// --- DELETE /rate_limit_issuer/pools/{name}/total ---------------------------
+// --- DELETE /rate_limit_tls_issuer/pools/{name}/total ---------------------------
 
 func TestAdmin_DeleteTotal_ResetsCounters(t *testing.T) {
 	entry := registerAdminPool(t, t.Name(), 10, time.Hour)
 	entry.state.recordTotal()
 	entry.state.recordTotal()
 
-	rec := adminRequest(t, http.MethodDelete, "/rate_limit_issuer/pools/"+t.Name()+"/total")
+	rec := adminRequest(t, http.MethodDelete, "/rate_limit_tls_issuer/pools/"+t.Name()+"/total")
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
 	}
@@ -249,7 +249,7 @@ func TestAdmin_DeleteTotal_PreservesDomains(t *testing.T) {
 	entry.state.recordTotal()
 	entry.state.recordDomain("example.com")
 
-	adminRequest(t, http.MethodDelete, "/rate_limit_issuer/pools/"+t.Name()+"/total")
+	adminRequest(t, http.MethodDelete, "/rate_limit_tls_issuer/pools/"+t.Name()+"/total")
 
 	entry.state.mu.Lock()
 	_, hasDomain := entry.state.domains["example.com"]
@@ -261,7 +261,7 @@ func TestAdmin_DeleteTotal_PreservesDomains(t *testing.T) {
 }
 
 func TestAdmin_DeleteTotal_NotFound(t *testing.T) {
-	req := httptest.NewRequest(http.MethodDelete, "/rate_limit_issuer/pools/nonexistent/total", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/rate_limit_tls_issuer/pools/nonexistent/total", nil)
 	rec := httptest.NewRecorder()
 	a := RateLimitAdmin{}
 	_ = a.handleRequest(rec, req)
@@ -270,7 +270,7 @@ func TestAdmin_DeleteTotal_NotFound(t *testing.T) {
 	}
 }
 
-// --- DELETE /rate_limit_issuer/pools/{name} ---------------------------------
+// --- DELETE /rate_limit_tls_issuer/pools/{name} ---------------------------------
 
 func TestAdmin_DeletePool_ResetsAllWindows(t *testing.T) {
 	sp := &SharedPool{
@@ -283,7 +283,7 @@ func TestAdmin_DeletePool_ResetsAllWindows(t *testing.T) {
 	entry.state.recordTotal()
 	entry.state.recordDomain("example.com")
 
-	rec := adminRequest(t, http.MethodDelete, "/rate_limit_issuer/pools/"+t.Name())
+	rec := adminRequest(t, http.MethodDelete, "/rate_limit_tls_issuer/pools/"+t.Name())
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
 	}
@@ -302,7 +302,7 @@ func TestAdmin_DeletePool_ResetsAllWindows(t *testing.T) {
 }
 
 func TestAdmin_DeletePool_NotFound(t *testing.T) {
-	req := httptest.NewRequest(http.MethodDelete, "/rate_limit_issuer/pools/nonexistent", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/rate_limit_tls_issuer/pools/nonexistent", nil)
 	rec := httptest.NewRecorder()
 	a := RateLimitAdmin{}
 	_ = a.handleRequest(rec, req)
@@ -311,7 +311,7 @@ func TestAdmin_DeletePool_NotFound(t *testing.T) {
 	}
 }
 
-// --- DELETE /rate_limit_issuer/pools/{name}/domains/{domain} ----------------
+// --- DELETE /rate_limit_tls_issuer/pools/{name}/domains/{domain} ----------------
 
 func TestAdmin_DeleteDomain_ResetsDomainWindows(t *testing.T) {
 	sp := &SharedPool{
@@ -323,7 +323,7 @@ func TestAdmin_DeleteDomain_ResetsDomainWindows(t *testing.T) {
 	entry.state.recordDomain("example.com")
 	entry.state.recordDomain("other.com")
 
-	rec := adminRequest(t, http.MethodDelete, "/rate_limit_issuer/pools/"+t.Name()+"/domains/example.com")
+	rec := adminRequest(t, http.MethodDelete, "/rate_limit_tls_issuer/pools/"+t.Name()+"/domains/example.com")
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
 	}
@@ -342,7 +342,7 @@ func TestAdmin_DeleteDomain_ResetsDomainWindows(t *testing.T) {
 }
 
 func TestAdmin_DeleteDomain_NotFound(t *testing.T) {
-	req := httptest.NewRequest(http.MethodDelete, "/rate_limit_issuer/pools/nonexistent/domains/example.com", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/rate_limit_tls_issuer/pools/nonexistent/domains/example.com", nil)
 	rec := httptest.NewRecorder()
 	a := RateLimitAdmin{}
 	_ = a.handleRequest(rec, req)
@@ -354,14 +354,14 @@ func TestAdmin_DeleteDomain_NotFound(t *testing.T) {
 // --- 404 / method routing ---------------------------------------------------
 
 func TestAdmin_UnknownPath_Returns404(t *testing.T) {
-	rec := adminRequest(t, http.MethodGet, "/rate_limit_issuer/unknown")
+	rec := adminRequest(t, http.MethodGet, "/rate_limit_tls_issuer/unknown")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
 
 func TestAdmin_WrongMethod_Returns404(t *testing.T) {
-	rec := adminRequest(t, http.MethodPost, "/rate_limit_issuer/pools")
+	rec := adminRequest(t, http.MethodPost, "/rate_limit_tls_issuer/pools")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}

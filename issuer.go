@@ -65,8 +65,6 @@ func init() {
 // process to share rate limit state. Instances referencing the same pool name
 // share in-memory sliding windows. Shared pool state is persisted to Caddy's
 // configured storage backend and restored on startup.
-//
-// EXPERIMENTAL: Subject to change.
 type RateLimitIssuer struct {
 	// The inner issuer to delegate certificate issuance to.
 	// Any tls.issuance module is accepted. Required.
