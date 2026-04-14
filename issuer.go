@@ -34,6 +34,7 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/mholt/acmez/v3/acme"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/net/publicsuffix"
 
 	"github.com/caddyserver/caddy/v2"
@@ -91,12 +92,29 @@ type RateLimitIssuer struct {
 	// Useful for distinguishing multiple local instances in the admin UI.
 	InstanceID string `json:"instance_id,omitempty"`
 
+	// When true, per-request rate limit evaluation details (renewal bypass,
+	// limit check results, and issuance recording) are emitted at info level
+	// regardless of the global Caddy log level. When false (the default), the
+	// same details are only emitted when Caddy's global log level is set to debug.
+	Debug bool `json:"debug,omitempty"`
+
 	issuer         certmagic.Issuer
 	logger         *zap.Logger
 	rateLimiter    *rateLimitState           // local limiter
 	sharedLimiters map[string]*registryEntry // keyed by pool name
 	storage        certmagic.Storage         // for shared pool persistence
 	instanceID     string                    // admin registry key, set at Provision
+}
+
+// debugCheck returns a zap.CheckedEntry for a debug-level message. When the
+// Debug flag is enabled the entry is checked at info level so it is always
+// emitted regardless of the global Caddy log level. When Debug is false the
+// entry is only emitted when Caddy's global log level includes debug.
+func (iss *RateLimitIssuer) debugCheck(msg string) *zapcore.CheckedEntry {
+	if iss.Debug {
+		return iss.logger.Check(zapcore.InfoLevel, msg)
+	}
+	return iss.logger.Check(zapcore.DebugLevel, msg)
 }
 
 // CaddyModule returns the Caddy module information.
@@ -266,9 +284,16 @@ func (iss *RateLimitIssuer) Cleanup() error {
 // Rate limit errors are wrapped in certmagic.ErrNoRetry so that the TLS
 // handshake fails immediately rather than blocking in certmagic's obtain loop.
 func (iss *RateLimitIssuer) PreCheck(ctx context.Context, names []string, interactive bool) error {
-	if !iss.isRenewal(ctx, names) {
+	if iss.isRenewal(ctx, names) {
+		if ce := iss.debugCheck("renewal detected; bypassing rate limits"); ce != nil {
+			ce.Write(zap.Strings("names", names))
+		}
+	} else {
 		if err := iss.checkRateLimits(names); err != nil {
 			return certmagic.ErrNoRetry{Err: err}
+		}
+		if ce := iss.debugCheck("rate limits passed"); ce != nil {
+			ce.Write(zap.Strings("names", names))
 		}
 	}
 	if pc, ok := iss.issuer.(certmagic.PreChecker); ok {
@@ -288,6 +313,9 @@ func (iss *RateLimitIssuer) Issue(ctx context.Context, csr *x509.CertificateRequ
 	}
 	if !renewal {
 		iss.recordIssuance(csr.DNSNames)
+		if ce := iss.debugCheck("issuance recorded against rate limit counters"); ce != nil {
+			ce.Write(zap.Strings("names", csr.DNSNames))
+		}
 	}
 	return cert, nil
 }

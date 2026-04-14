@@ -174,6 +174,16 @@ func (iss *RateLimitIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 			iss.SharedPools = append(iss.SharedPools, sp)
 
+		case "debug":
+			if !d.NextArg() {
+				return d.ArgErr()
+			}
+			v, err := strconv.ParseBool(d.Val())
+			if err != nil {
+				return d.Errf("invalid boolean value for debug: %s", d.Val())
+			}
+			iss.Debug = v
+
 		default:
 			return d.Errf("unknown subdirective '%s'", d.Val())
 		}

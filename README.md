@@ -89,6 +89,7 @@ issuer rate_limit {
 | `issuer <module> { ... }` | Yes | Inner issuer to delegate certificate issuance to. Any `tls.issuance` module is accepted. |
 | `local [<name>] { ... }` | No | Local rate limits scoped to this instance. The optional `<name>` is a stable identifier used as the key in the admin registry (see [Admin API](#admin-api)); if omitted, a UUID is generated at provision time. May appear at most once. |
 | `shared <name> { ... }` | No | Named shared pool. Rate limit state is shared across all `rate_limit` instances referencing the same name. Persistent by default; use `ephemeral` inside the block to disable persistence. May be repeated for multiple pools. See [Shared pools](#shared-pools) below. |
+| `debug <bool>` | No | When `true`, per-request rate limit evaluation details are emitted at info level regardless of the global Caddy log level. Default: `false`. |
 
 #### `local` block subdirectives
 
