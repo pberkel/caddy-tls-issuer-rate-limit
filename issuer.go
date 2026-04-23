@@ -214,7 +214,7 @@ func (iss *RateLimitIssuer) Provision(ctx caddy.Context) error {
 		poolNames = append(poolNames, sp.Name)
 	}
 	iss.logger.Info("rate_limit issuer ready",
-		zap.Int("rate_limits", len(iss.RateLimit)),
+		zap.Int("local_rate_limits", len(iss.RateLimit)),
 		zap.Int("per_domain_rate_limits", len(iss.PerDomainRateLimit)),
 		zap.Strings("shared_pools", poolNames),
 	)
